@@ -16,6 +16,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("projects", help="List projects in the workspace.")
 
+    create_parser = subparsers.add_parser("create", help="Create a project workspace.")
+    create_parser.add_argument("--project-id", required=True)
+    create_parser.add_argument("--audio", required=True, help="Input audio path.")
+    lyrics_source = create_parser.add_mutually_exclusive_group(required=True)
+    lyrics_source.add_argument("--lyrics", help="Lyrics text.")
+    lyrics_source.add_argument("--lyrics-file", help="Lyrics text file.")
+    create_parser.add_argument("--tempo", type=float, default=None, help="Manual global tempo.")
+    create_parser.add_argument("--overwrite", action="store_true", help="Overwrite an existing manifest.")
+
     status_parser = subparsers.add_parser("status", help="Show one project status.")
     status_parser.add_argument("project_id")
 
@@ -34,6 +43,18 @@ def main(argv: list[str] | None = None) -> int:
                 f"{project.project_id}\tsteps={project.step_count}\t"
                 f"artifacts={project.artifact_count}\twarnings={project.warning_count}\terrors={project.error_count}"
             )
+        return 0
+
+    if args.command == "create":
+        manifest = controller.create_project(
+            project_id=args.project_id,
+            audio_path=args.audio,
+            lyrics_text=args.lyrics,
+            lyrics_path=args.lyrics_file,
+            global_tempo=args.tempo,
+            overwrite=args.overwrite,
+        )
+        print(f"Created project {manifest.project_id}: {manifest.project_dir}")
         return 0
 
     if args.command == "status":

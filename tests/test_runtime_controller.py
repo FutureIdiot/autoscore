@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from autoscore.cli.main import main
 from autoscore.core.artifacts import ArtifactRef
 from autoscore.core.projects import ProjectManifest
 from autoscore.runtime import AutoscoreController, NodeRegistration
@@ -76,6 +77,72 @@ class AutoscoreControllerTests(unittest.TestCase):
         self.assertEqual(status.artifact_ids, ["artifact_original_audio"])
         self.assertEqual(status.steps[0].task_type, "createProject")
         self.assertEqual(status.steps[0].status, "succeeded")
+
+    def test_create_project_imports_inputs_and_writes_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            controller = AutoscoreController(workspace)
+
+            manifest = controller.create_project(
+                project_id="demo",
+                audio_path=source_audio,
+                lyrics_text="hello world",
+                global_tempo=120,
+            )
+
+            project_dir = workspace / "demo"
+            loaded = ProjectManifest.load(project_dir / "manifest.json")
+            copied_audio = (project_dir / "input" / "original_audio.wav").read_bytes()
+            copied_lyrics = (project_dir / "input" / "lyrics.txt").read_text(encoding="utf-8")
+
+        self.assertEqual(manifest.project_id, "demo")
+        self.assertEqual(loaded.metadata["manual"]["globalTempo"], 120)
+        self.assertIn("artifact_original_audio", loaded.artifacts)
+        self.assertIn("artifact_lyrics_txt", loaded.artifacts)
+        self.assertIn("artifact_manual_metadata_json", loaded.artifacts)
+        self.assertEqual(loaded.steps["createProject"].status, "succeeded")
+        self.assertEqual(copied_audio, b"audio")
+        self.assertEqual(copied_lyrics, "hello world")
+
+    def test_create_project_rejects_existing_manifest_without_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            controller = AutoscoreController(workspace)
+            controller.create_project(project_id="demo", audio_path=source_audio, lyrics_text="hello")
+
+            with self.assertRaises(FileExistsError):
+                controller.create_project(project_id="demo", audio_path=source_audio, lyrics_text="hello")
+
+    def test_cli_create_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+
+            exit_code = main(
+                [
+                    "--workspace",
+                    str(workspace),
+                    "create",
+                    "--project-id",
+                    "demo",
+                    "--audio",
+                    str(source_audio),
+                    "--lyrics",
+                    "hello",
+                    "--tempo",
+                    "120",
+                ]
+            )
+
+            manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(manifest.project_id, "demo")
 
 
 if __name__ == "__main__":

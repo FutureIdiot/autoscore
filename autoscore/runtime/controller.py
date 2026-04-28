@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from autoscore.core.artifacts import LocalArtifactStore
 from autoscore.core.projects import ProjectManifest
 from autoscore.runtime.registry import NodeRegistration, default_local_nodes
+
+_PROJECT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +69,68 @@ class AutoscoreController:
     def list_nodes(self) -> list[NodeRegistration]:
         return sorted(self._nodes, key=lambda node: node.node_id)
 
+    def create_project(
+        self,
+        *,
+        project_id: str,
+        audio_path: str | Path,
+        lyrics_text: str | None = None,
+        lyrics_path: str | Path | None = None,
+        global_tempo: float | None = None,
+        meter: dict[str, object] | None = None,
+        key: dict[str, object] | None = None,
+        overwrite: bool = False,
+    ) -> ProjectManifest:
+        """Create a project workspace and manifest from user inputs."""
+
+        self._validate_project_id(project_id)
+        if lyrics_text is None and lyrics_path is None:
+            raise ValueError("lyrics_text or lyrics_path is required")
+
+        project_dir = self.workspace_root / project_id
+        manifest_path = project_dir / "manifest.json"
+        if manifest_path.exists() and not overwrite:
+            raise FileExistsError(manifest_path)
+
+        project_dir.mkdir(parents=True, exist_ok=True)
+        store = LocalArtifactStore(project_dir)
+        manifest = ProjectManifest(project_id=project_id, project_dir=str(project_dir))
+
+        audio_ref = store.import_file(
+            audio_path,
+            kind="audio/wav",
+            relative_path="input/original_audio.wav",
+            artifact_id="artifact_original_audio",
+        )
+        manifest.register_artifact(audio_ref)
+
+        lyrics_ref = self._write_lyrics_artifact(store, lyrics_text=lyrics_text, lyrics_path=lyrics_path)
+        manifest.register_artifact(lyrics_ref)
+
+        metadata_ref = self._write_manual_metadata_artifact(
+            store,
+            global_tempo=global_tempo,
+            meter=meter,
+            key=key,
+        )
+        manifest.register_artifact(metadata_ref)
+        manifest.metadata["manual"] = {
+            "globalTempo": global_tempo,
+            "meter": meter or {},
+            "key": key or {},
+        }
+        manifest.set_step_status(
+            "createProject",
+            "succeeded",
+            output_artifact_ids=[
+                audio_ref.artifact_id,
+                lyrics_ref.artifact_id,
+                metadata_ref.artifact_id,
+            ],
+        )
+        manifest.save(manifest_path)
+        return manifest
+
     def load_manifest(self, project_id: str) -> ProjectManifest:
         return ProjectManifest.load(self._manifest_path(project_id))
 
@@ -104,6 +171,54 @@ class AutoscoreController:
         if not project_id:
             raise ValueError("project_id is required")
         return self.workspace_root / project_id / "manifest.json"
+
+    @staticmethod
+    def _validate_project_id(project_id: str) -> None:
+        if not project_id:
+            raise ValueError("project_id is required")
+        if not _PROJECT_ID_PATTERN.fullmatch(project_id):
+            raise ValueError("project_id may only contain letters, numbers, underscore, dash, and dot")
+
+    @staticmethod
+    def _write_lyrics_artifact(
+        store: LocalArtifactStore,
+        *,
+        lyrics_text: str | None,
+        lyrics_path: str | Path | None,
+    ):
+        target = store.resolve_relative_path("input/lyrics.txt")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if lyrics_path is not None:
+            target.write_text(Path(lyrics_path).read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+        else:
+            target.write_text(lyrics_text or "", encoding="utf-8", newline="\n")
+        return store.create_ref(
+            artifact_id="artifact_lyrics_txt",
+            kind="text/plain",
+            relative_path="input/lyrics.txt",
+        )
+
+    @staticmethod
+    def _write_manual_metadata_artifact(
+        store: LocalArtifactStore,
+        *,
+        global_tempo: float | None,
+        meter: dict[str, object] | None,
+        key: dict[str, object] | None,
+    ):
+        target = store.resolve_relative_path("input/manual_metadata.json")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "globalTempo": global_tempo,
+            "meter": meter or {},
+            "key": key or {},
+        }
+        target.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+        return store.create_ref(
+            artifact_id="artifact_manual_metadata_json",
+            kind="application/json",
+            relative_path="input/manual_metadata.json",
+        )
 
     @staticmethod
     def _summary_from_manifest(manifest: ProjectManifest, manifest_path: Path) -> ProjectSummary:
