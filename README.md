@@ -1,0 +1,129 @@
+# Autoscore
+
+Autoscore is a Python 3.12 project for converting vocal audio, lyrics, and
+inference outputs into a canonical score timeline and, later, `score.json`.
+
+This repository currently contains the project skeleton, runtime contracts,
+development controller/TUI shell, and timeline foundation models. It does not
+yet run real audio separation, tempo estimation, GAME inference, LyricFA, or
+score export.
+
+## Current Package Layout
+
+```text
+autoscore/
+  core/
+    artifacts/       artifact references
+    projects/        project manifest and migration entry point
+    problems.py      structured warning/error records
+
+  runtime/
+    controller.py    UI-facing orchestration controller
+    registry.py      local node registry for development
+    tasks.py         task envelope/result contracts
+
+  packages/
+    audio/           source separation boundary
+    timeline/        tempo, phrase slicing, alignment, stitching
+    midi/            GAME integration boundary
+    lyric/           LyricFA integration boundary
+    score_export/    future score JSON export boundary
+
+  cli/
+    main.py          `autoscore` command entrypoint
+    tui.py           dependency-free development TUI
+
+tests/
+workspaces/          local runtime project data, ignored except `.gitkeep`
+```
+
+Private design drafts may exist locally under `.designdocuments/`, but that
+directory is intentionally ignored and should not be treated as the current
+source of truth.
+
+## Environment
+
+Use `uv`. The project is pinned to Python 3.12 for now:
+
+```toml
+requires-python = ">=3.12,<3.13"
+```
+
+Install and test:
+
+```powershell
+uv sync --extra dev
+uv run --extra dev pytest
+```
+
+Run CLI/TUI:
+
+```powershell
+uv run autoscore projects
+uv run autoscore tui
+```
+
+## Current Runtime Model
+
+The runtime separates three concepts:
+
+```text
+deployment package -> node capability -> task type
+```
+
+Current local development node registry:
+
+```text
+audio-local          separator-node
+timeline-local       tempo-node, phrase-node, alignment-node, stitch-node
+midi-local           game-node       unconfigured
+lyric-local          lyricfa-node    unconfigured
+score-export-local   score-json-node
+```
+
+The TUI displays registered nodes even when no task is running. This is a
+development visibility feature for checking what the controller knows how to
+communicate with.
+
+## Implemented
+
+- Python package skeleton and uv lockfile.
+- `ArtifactRef` with local/remote artifact reference fields.
+- `ProjectManifest` and `ManifestStep`.
+- Project manifest migration entry point.
+- Structured `ProblemRecord` warning/error shape.
+- `TaskEnvelope`, `TaskResult`, `ExecutionInfo`, and `TaskRequirements`.
+- JSON/TOML package config loader.
+- Runtime controller and local development node registry.
+- Dependency-free CLI/TUI shell.
+- Timeline foundation models:
+  - tempo ms/tick conversion;
+  - phrase slice metadata;
+  - phrase anchor offset;
+  - aligned note/lyric fragments;
+  - lyric-to-note matching;
+  - stitched timeline fragments.
+
+## Not Implemented Yet
+
+- Real project creation command.
+- Local artifact registry and materialization.
+- DAG scheduler and rerun/resume behavior.
+- Local/mock task runners.
+- Real separator backend.
+- Real or mocked tempo/phrase audio analysis.
+- Real GAME adapter.
+- Real or mocked LyricFA adapter.
+- Score schema models and score JSON export.
+- WebUI.
+
+## Recommended Next Steps
+
+1. Implement local artifact registry and project creation.
+2. Add task runner interfaces and mock runners for the major task types.
+3. Wire the runtime controller/TUI to run mock steps and update manifests.
+4. Add timeline mock outputs for `estimateTempo`, `detectPhrases`,
+   `alignPhrase`, and `stitchPhrases`.
+5. Add audio-package mock separator.
+6. Build an end-to-end mock pipeline before integrating GAME, LyricFA, or
+   heavy audio dependencies.
