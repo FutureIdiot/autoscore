@@ -1,0 +1,1 @@
+"""alignment-node implementation placeholder."""

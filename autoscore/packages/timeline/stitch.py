@@ -1,0 +1,1 @@
+"""stitch-node implementation placeholder."""
