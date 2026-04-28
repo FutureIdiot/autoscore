@@ -14,22 +14,13 @@ older private implementation lists that may exist locally under
 - Package config loading from JSON and TOML.
 - Runtime controller and static local node registry.
 - Dependency-free development CLI/TUI shell.
+- Local artifact registry and materialization.
+- CLI project creation and TUI import-directory project creation.
 - Timeline foundation models and tests.
 
 ## Next Steps
 
-1. Local Artifact Registry
-
-   Implement artifact id generation, hashing, lookup, and materialization for
-   local tasks. Preserve `relativePath`, `uri`, `sha256`, and size metadata.
-
-2. Project Creation
-
-   Add a CLI/controller path to create a project workspace from input audio and
-   lyrics. Write `manifest.json`, copy or register input artifacts, and mark
-   `createProject` as succeeded.
-
-3. Mock Task Runners
+1. Mock Task Runners
 
    Add local/mock runners for the major task types:
 
@@ -44,28 +35,28 @@ older private implementation lists that may exist locally under
    buildScoreJson
    ```
 
-4. Controller/TUI Step Execution
+2. Controller/TUI Step Execution
 
    Wire `AutoscoreController.run_step()` to task runners so the TUI can trigger
    a selected step and immediately show manifest/artifact changes.
 
-5. End-to-End Mock Pipeline
+3. End-to-End Mock Pipeline
 
    Run a full project through mock separator, mock timeline, mock GAME, mock
    LyricFA, alignment, stitching, and placeholder score export.
 
-6. Real Timeline Analysis
+4. Real Timeline Analysis
 
    Add tempo and phrase detection backends. Start with lightweight mocked or
    librosa-based behavior, then evaluate Essentia when needed.
 
-7. External Integrations
+5. External Integrations
 
    Integrate GAME and LyricFA behind their package boundaries. Keep their local
    Python paths and model paths in package config or provenance, not in project
    manifests.
 
-8. Score Export
+6. Score Export
 
    Implement canonical score schema models, validation, bar generation, and
    `score.json` export after the mock pipeline is stable.

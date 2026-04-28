@@ -12,6 +12,30 @@ from autoscore.constants import SCHEMA_VERSION
 
 
 @dataclass(slots=True)
+class AppConfig:
+    """Local application configuration for development control surfaces."""
+
+    import_dir: str | None = None
+    default_tempo: float | None = None
+    audio_extensions: list[str] = field(default_factory=lambda: [".wav", ".flac", ".mp3", ".m4a"])
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "AppConfig":
+        return cls(
+            import_dir=data.get("importDir"),
+            default_tempo=data.get("defaultTempo"),
+            audio_extensions=[str(item).lower() for item in data.get("audioExtensions", [".wav", ".flac", ".mp3", ".m4a"])],
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "importDir": self.import_dir,
+            "defaultTempo": self.default_tempo,
+            "audioExtensions": self.audio_extensions,
+        }
+
+
+@dataclass(slots=True)
 class PackageConfig:
     """Local deployment package configuration."""
 
@@ -87,3 +111,18 @@ def load_package_config(path: str | Path) -> PackageConfig:
         with config_path.open("rb") as handle:
             return PackageConfig.from_dict(tomllib.load(handle))
     raise ValueError(f"unsupported package config format: {config_path.suffix}")
+
+
+def load_app_config(path: str | Path = "config/autoscore.local.json") -> AppConfig:
+    """Load local app config, returning defaults when no file exists."""
+
+    config_path = Path(path)
+    if not config_path.exists():
+        return AppConfig()
+    if config_path.suffix.lower() == ".json":
+        with config_path.open("r", encoding="utf-8") as handle:
+            return AppConfig.from_dict(json.load(handle))
+    if config_path.suffix.lower() == ".toml":
+        with config_path.open("rb") as handle:
+            return AppConfig.from_dict(tomllib.load(handle))
+    raise ValueError(f"unsupported app config format: {config_path.suffix}")

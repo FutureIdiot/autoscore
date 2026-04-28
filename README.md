@@ -63,6 +63,11 @@ uv run autoscore projects
 uv run autoscore tui
 ```
 
+For TUI batch project creation, copy `config/autoscore.local.example.json` to
+`config/autoscore.local.json` and set `importDir` to the directory where you drop
+audio files and optional same-name `.txt` lyric files. The local config file is
+ignored by Git. In the TUI, press `c` to create projects from that directory.
+
 ## Current Runtime Model
 
 The runtime separates three concepts:
@@ -96,6 +101,8 @@ communicate with.
 - JSON/TOML package config loader.
 - Runtime controller and local development node registry.
 - Dependency-free CLI/TUI shell.
+- CLI project creation and TUI import-directory project creation.
+- Local artifact registry and materialization.
 - Timeline foundation models:
   - tempo ms/tick conversion;
   - phrase slice metadata;
@@ -106,8 +113,6 @@ communicate with.
 
 ## Not Implemented Yet
 
-- Real project creation command.
-- Local artifact registry and materialization.
 - DAG scheduler and rerun/resume behavior.
 - Local/mock task runners.
 - Real separator backend.
@@ -119,11 +124,10 @@ communicate with.
 
 ## Recommended Next Steps
 
-1. Implement local artifact registry and project creation.
-2. Add task runner interfaces and mock runners for the major task types.
-3. Wire the runtime controller/TUI to run mock steps and update manifests.
-4. Add timeline mock outputs for `estimateTempo`, `detectPhrases`,
+1. Add task runner interfaces and mock runners for the major task types.
+2. Wire the runtime controller/TUI to run mock steps and update manifests.
+3. Add timeline mock outputs for `estimateTempo`, `detectPhrases`,
    `alignPhrase`, and `stitchPhrases`.
-5. Add audio-package mock separator.
-6. Build an end-to-end mock pipeline before integrating GAME, LyricFA, or
+4. Add audio-package mock separator.
+5. Build an end-to-end mock pipeline before integrating GAME, LyricFA, or
    heavy audio dependencies.

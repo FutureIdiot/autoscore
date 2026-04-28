@@ -5,7 +5,8 @@ from pathlib import Path
 from autoscore.cli.main import main
 from autoscore.core.artifacts import ArtifactRef
 from autoscore.core.projects import ProjectManifest
-from autoscore.runtime import AutoscoreController, NodeRegistration
+from autoscore.config import AppConfig
+from autoscore.runtime import AutoscoreController, NodeRegistration, project_id_from_name
 
 
 class AutoscoreControllerTests(unittest.TestCase):
@@ -143,6 +144,48 @@ class AutoscoreControllerTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(manifest.project_id, "demo")
+
+    def test_create_projects_from_configured_import_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            import_dir = root / "imports"
+            import_dir.mkdir()
+            (import_dir / "Song A.wav").write_bytes(b"audio-a")
+            (import_dir / "Song A.txt").write_text("lyrics a", encoding="utf-8")
+            (import_dir / "Song B.flac").write_bytes(b"audio-b")
+            controller = AutoscoreController(
+                root / "workspaces",
+                app_config=AppConfig(import_dir=str(import_dir), default_tempo=120),
+            )
+
+            results = controller.create_projects_from_import_dir()
+            status = controller.get_project_status("Song_A")
+
+        self.assertEqual([result.status for result in results], ["created", "created"])
+        self.assertEqual(status.summary.project_id, "Song_A")
+        self.assertEqual(status.summary.artifact_count, 3)
+
+    def test_create_projects_from_import_dir_skips_existing_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            import_dir = root / "imports"
+            import_dir.mkdir()
+            audio = import_dir / "song.wav"
+            audio.write_bytes(b"audio")
+            controller = AutoscoreController(
+                root / "workspaces",
+                app_config=AppConfig(import_dir=str(import_dir)),
+            )
+            controller.create_projects_from_import_dir()
+
+            results = controller.create_projects_from_import_dir()
+
+        self.assertEqual(results[0].status, "skipped")
+
+    def test_project_id_from_name_sanitizes_file_stem(self) -> None:
+        self.assertEqual(project_id_from_name("Song A 01"), "Song_A_01")
+        with self.assertRaises(ValueError):
+            project_id_from_name("...")
 
 
 if __name__ == "__main__":

@@ -18,8 +18,11 @@ def run_tui(controller: AutoscoreController) -> None:
         if not projects:
             print("No projects found under workspace.")
             print()
-            if _prompt("q=quit, Enter=refresh: ").lower() == "q":
+            choice = _prompt("c=create from import dir, q=quit, Enter=refresh: ").lower()
+            if choice == "q":
                 return
+            if choice == "c":
+                _create_from_import_dir(controller)
             continue
 
         for index, project in enumerate(projects, start=1):
@@ -29,9 +32,12 @@ def run_tui(controller: AutoscoreController) -> None:
                 f"warnings={project.warning_count} errors={project.error_count}"
             )
         print()
-        choice = _prompt("Select project number, r=refresh, q=quit: ").strip().lower()
+        choice = _prompt("Select project number, c=create from import dir, r=refresh, q=quit: ").strip().lower()
         if choice == "q":
             return
+        if choice == "c":
+            _create_from_import_dir(controller)
+            continue
         if choice in {"", "r"}:
             continue
         if not choice.isdigit() or not 1 <= int(choice) <= len(projects):
@@ -50,6 +56,29 @@ def _project_screen(controller: AutoscoreController, project_id: str) -> None:
             return
         if choice == "q":
             raise SystemExit(0)
+
+
+def _create_from_import_dir(controller: AutoscoreController) -> None:
+    _clear_screen()
+    print("Create Projects From Import Directory")
+    print("-------------------------------------")
+    print(f"Configured import dir: {controller.app_config.import_dir or '(not configured)'}")
+    print(f"Default tempo: {controller.app_config.default_tempo}")
+    print()
+    try:
+        results = controller.create_projects_from_import_dir()
+    except Exception as exc:
+        print(f"Failed: {exc}")
+        _prompt("Press Enter to continue: ")
+        return
+    if not results:
+        print("No audio files found.")
+    for result in results:
+        line = f"{result.status:8} {result.project_id} <- {result.audio_path}"
+        if result.message:
+            line += f" ({result.message})"
+        print(line)
+    _prompt("Press Enter to continue: ")
 
 
 def _print_nodes(controller: AutoscoreController) -> None:

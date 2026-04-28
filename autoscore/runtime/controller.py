@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from autoscore.config import AppConfig, load_app_config
 from autoscore.core.artifacts import LocalArtifactStore
 from autoscore.core.projects import ProjectManifest
 from autoscore.runtime.registry import NodeRegistration, default_local_nodes
@@ -51,6 +52,16 @@ class ProjectStatus:
     errors: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True, slots=True)
+class ProjectCreateResult:
+    """Result for one batch project creation candidate."""
+
+    project_id: str
+    audio_path: str
+    status: str
+    message: str = ""
+
+
 class AutoscoreController:
     """Stable control surface for UI layers."""
 
@@ -58,9 +69,11 @@ class AutoscoreController:
         self,
         workspace_root: str | Path = "workspaces",
         nodes: list[NodeRegistration] | None = None,
+        app_config: AppConfig | None = None,
     ) -> None:
         self.workspace_root = Path(workspace_root)
         self._nodes = nodes if nodes is not None else default_local_nodes()
+        self.app_config = app_config if app_config is not None else load_app_config()
 
     def list_projects(self) -> list[ProjectSummary]:
         manifests = sorted(self.workspace_root.glob("*/manifest.json"))
@@ -130,6 +143,67 @@ class AutoscoreController:
         )
         manifest.save(manifest_path)
         return manifest
+
+    def create_projects_from_import_dir(
+        self,
+        *,
+        import_dir: str | Path | None = None,
+        default_tempo: float | None = None,
+        overwrite: bool = False,
+    ) -> list[ProjectCreateResult]:
+        """Create projects for audio files in the configured import directory."""
+
+        selected_import_dir = Path(import_dir or self.app_config.import_dir or "")
+        if not str(selected_import_dir):
+            raise ValueError("import directory is not configured")
+        if not selected_import_dir.is_dir():
+            raise FileNotFoundError(selected_import_dir)
+
+        tempo = default_tempo if default_tempo is not None else self.app_config.default_tempo
+        audio_extensions = {extension.lower() for extension in self.app_config.audio_extensions}
+        audio_files = sorted(
+            path for path in selected_import_dir.iterdir() if path.is_file() and path.suffix.lower() in audio_extensions
+        )
+        results: list[ProjectCreateResult] = []
+        for audio_file in audio_files:
+            project_id = project_id_from_name(audio_file.stem)
+            lyrics_path = audio_file.with_suffix(".txt")
+            try:
+                self.create_project(
+                    project_id=project_id,
+                    audio_path=audio_file,
+                    lyrics_path=lyrics_path if lyrics_path.exists() else None,
+                    lyrics_text="" if not lyrics_path.exists() else None,
+                    global_tempo=tempo,
+                    overwrite=overwrite,
+                )
+            except FileExistsError:
+                results.append(
+                    ProjectCreateResult(
+                        project_id=project_id,
+                        audio_path=str(audio_file),
+                        status="skipped",
+                        message="project already exists",
+                    )
+                )
+            except Exception as exc:
+                results.append(
+                    ProjectCreateResult(
+                        project_id=project_id,
+                        audio_path=str(audio_file),
+                        status="failed",
+                        message=str(exc),
+                    )
+                )
+            else:
+                results.append(
+                    ProjectCreateResult(
+                        project_id=project_id,
+                        audio_path=str(audio_file),
+                        status="created",
+                    )
+                )
+        return results
 
     def load_manifest(self, project_id: str) -> ProjectManifest:
         return ProjectManifest.load(self._manifest_path(project_id))
@@ -231,3 +305,10 @@ class AutoscoreController:
             warning_count=len(manifest.warnings),
             error_count=len(manifest.errors),
         )
+
+
+def project_id_from_name(name: str) -> str:
+    project_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("._-")
+    if not project_id:
+        raise ValueError("name does not contain a usable project id")
+    return project_id

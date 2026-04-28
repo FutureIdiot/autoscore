@@ -3,10 +3,36 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from autoscore.config import PackageConfig, load_package_config
+from autoscore.config import AppConfig, PackageConfig, load_app_config, load_package_config
 
 
 class PackageConfigTests(unittest.TestCase):
+    def test_loads_default_app_config_when_file_missing(self) -> None:
+        config = load_app_config("missing-autoscore-local.json")
+
+        self.assertIsInstance(config, AppConfig)
+        self.assertIsNone(config.import_dir)
+
+    def test_loads_json_app_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "autoscore.local.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "importDir": "D:/autoscore-imports",
+                        "defaultTempo": 120,
+                        "audioExtensions": [".wav"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_app_config(path)
+
+        self.assertEqual(config.import_dir, "D:/autoscore-imports")
+        self.assertEqual(config.default_tempo, 120)
+        self.assertEqual(config.audio_extensions, [".wav"])
+
     def test_package_config_round_trip_uses_contract_names(self) -> None:
         config = PackageConfig(
             package_id="timeline-package",
