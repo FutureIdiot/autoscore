@@ -63,6 +63,39 @@ class ProjectManifestTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             manifest.set_step_status("runGame", "done")
 
+    def test_rejects_camel_case_step_update_arguments(self) -> None:
+        manifest = ProjectManifest(project_id="project_001", project_dir="workspaces/project_001")
+
+        with self.assertRaises(TypeError):
+            manifest.set_step_status(
+                "createProject",
+                "succeeded",
+                outputArtifactIds=["artifact_original_audio"],  # type: ignore[call-arg]
+            )
+
+    def test_schema_version_mismatch_records_warning(self) -> None:
+        manifest = ProjectManifest(
+            project_id="project_001",
+            project_dir="workspaces/project_001",
+            schema_version=999,
+        )
+
+        self.assertEqual(manifest.schema_version, 999)
+        self.assertTrue(any("schemaVersion 999 differs" in warning for warning in manifest.warnings))
+
+    def test_load_migrates_manifest_dict_before_construction(self) -> None:
+        manifest = ProjectManifest.from_dict(
+            {
+                "schemaVersion": 999,
+                "projectId": "project_001",
+                "projectDir": "workspaces/project_001",
+                "warnings": ["existing warning"],
+            }
+        )
+
+        self.assertIn("existing warning", manifest.warnings)
+        self.assertTrue(any("no automatic migration" in warning for warning in manifest.warnings))
+
 
 if __name__ == "__main__":
     unittest.main()

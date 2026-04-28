@@ -10,6 +10,7 @@ from typing import Any
 
 from autoscore.constants import SCHEMA_VERSION
 from autoscore.core.artifacts import ArtifactRef
+from autoscore.core.projects.migrate import migrate_manifest_dict
 
 TASK_STATES = {
     "pending",
@@ -92,7 +93,12 @@ class ProjectManifest:
         if not self.project_dir:
             raise ValueError("project_dir is required")
         if self.schema_version != SCHEMA_VERSION:
-            raise ValueError(f"unsupported schema_version: {self.schema_version}")
+            warning = (
+                f"manifest schemaVersion {self.schema_version} differs from current "
+                f"{SCHEMA_VERSION}; migration should be handled before persistence"
+            )
+            if warning not in self.warnings:
+                self.warnings.append(warning)
 
     def touch(self) -> None:
         self.updated_at = utc_now_iso()
@@ -111,15 +117,31 @@ class ProjectManifest:
         self.steps[step.task_type] = step
         self.touch()
 
-    def set_step_status(self, task_type: str, status: str, **updates: Any) -> ManifestStep:
+    def set_step_status(
+        self,
+        task_type: str,
+        status: str,
+        *,
+        input_artifact_ids: list[str] | None = None,
+        output_artifact_ids: list[str] | None = None,
+        warnings: list[str] | None = None,
+        errors: list[str] | None = None,
+        execution: dict[str, Any] | None = None,
+    ) -> ManifestStep:
         if status not in TASK_STATES:
             raise ValueError(f"invalid task status: {status}")
         step = self.steps.get(task_type, ManifestStep(task_type=task_type))
         step.status = status
-        for key, value in updates.items():
-            if not hasattr(step, key):
-                raise ValueError(f"unknown step field: {key}")
-            setattr(step, key, value)
+        if input_artifact_ids is not None:
+            step.input_artifact_ids = input_artifact_ids
+        if output_artifact_ids is not None:
+            step.output_artifact_ids = output_artifact_ids
+        if warnings is not None:
+            step.warnings = warnings
+        if errors is not None:
+            step.errors = errors
+        if execution is not None:
+            step.execution = execution
         step.updated_at = utc_now_iso()
         self.steps[task_type] = step
         self.touch()
@@ -127,25 +149,26 @@ class ProjectManifest:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ProjectManifest":
+        migrated_data, _migration_warnings = migrate_manifest_dict(data)
         artifacts = {
             artifact_id: ArtifactRef.from_dict(artifact_data)
-            for artifact_id, artifact_data in data.get("artifacts", {}).items()
+            for artifact_id, artifact_data in migrated_data.get("artifacts", {}).items()
         }
         steps = {
             task_type: ManifestStep.from_dict(step_data)
-            for task_type, step_data in data.get("steps", {}).items()
+            for task_type, step_data in migrated_data.get("steps", {}).items()
         }
         return cls(
-            project_id=data["projectId"],
-            project_dir=data["projectDir"],
-            schema_version=data.get("schemaVersion", SCHEMA_VERSION),
-            created_at=data.get("createdAt", utc_now_iso()),
-            updated_at=data.get("updatedAt", utc_now_iso()),
+            project_id=migrated_data["projectId"],
+            project_dir=migrated_data["projectDir"],
+            schema_version=migrated_data.get("schemaVersion", SCHEMA_VERSION),
+            created_at=migrated_data.get("createdAt", utc_now_iso()),
+            updated_at=migrated_data.get("updatedAt", utc_now_iso()),
             artifacts=artifacts,
             steps=steps,
-            metadata=dict(data.get("metadata", {})),
-            warnings=list(data.get("warnings", [])),
-            errors=list(data.get("errors", [])),
+            metadata=dict(migrated_data.get("metadata", {})),
+            warnings=list(migrated_data.get("warnings", [])),
+            errors=list(migrated_data.get("errors", [])),
         )
 
     def to_dict(self) -> dict[str, Any]:
