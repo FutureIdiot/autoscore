@@ -128,6 +128,44 @@ class PhraseAlignment:
         }
 
 
+@dataclass(slots=True)
+class LyricNoteAlignment:
+    """Alignment from one lyric timestamp fragment to one or more note fragments."""
+
+    alignment_id: str
+    lyric_id: str
+    note_ids: list[str]
+    confidence: float | None = None
+    warnings: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.alignment_id:
+            raise ValueError("alignment_id is required")
+        if not self.lyric_id:
+            raise ValueError("lyric_id is required")
+        if not self.note_ids:
+            raise ValueError("note_ids are required")
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "LyricNoteAlignment":
+        return cls(
+            alignment_id=data["id"],
+            lyric_id=data["lyricId"],
+            note_ids=list(data["noteIds"]),
+            confidence=data.get("confidence"),
+            warnings=list(data.get("warnings", [])),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.alignment_id,
+            "lyricId": self.lyric_id,
+            "noteIds": self.note_ids,
+            "confidence": self.confidence,
+            "warnings": self.warnings,
+        }
+
+
 def align_fragments(fragments: list[TimedFragment], phrase_alignment: PhraseAlignment) -> list[AlignedFragment]:
     """Apply phrase offset to note or lyric fragments."""
 
@@ -137,3 +175,66 @@ def align_fragments(fragments: list[TimedFragment], phrase_alignment: PhraseAlig
         AlignedFragment.from_fragment(fragment, phrase_offset_ms=phrase_alignment.phrase_offset_ms)
         for fragment in fragments
     ]
+
+
+def match_lyrics_to_notes(
+    lyrics: list[AlignedFragment],
+    notes: list[AlignedFragment],
+    *,
+    max_nearest_distance_ms: int = 250,
+) -> list[LyricNoteAlignment]:
+    """Create initial lyric-to-note alignments from aligned fragment timing.
+
+    The first rule is overlap-based and supports one lyric mapped to multiple
+    notes. If a lyric has no overlapping note in the same phrase, the nearest
+    note center is selected and the alignment is marked with a warning.
+    """
+
+    if max_nearest_distance_ms < 0:
+        raise ValueError("max_nearest_distance_ms must be non-negative")
+
+    notes_by_phrase: dict[str, list[AlignedFragment]] = {}
+    for note in notes:
+        notes_by_phrase.setdefault(note.phrase_id, []).append(note)
+    for phrase_notes in notes_by_phrase.values():
+        phrase_notes.sort(key=lambda note: (note.global_start_ms, note.global_end_ms, note.fragment_id))
+
+    alignments: list[LyricNoteAlignment] = []
+    for index, lyric in enumerate(sorted(lyrics, key=lambda item: (item.global_start_ms, item.global_end_ms, item.fragment_id)), start=1):
+        phrase_notes = notes_by_phrase.get(lyric.phrase_id, [])
+        warnings: list[str] = []
+        matched_notes = [note for note in phrase_notes if _overlap_ms(lyric, note) > 0]
+
+        if not matched_notes and phrase_notes:
+            nearest_note, distance = _nearest_note(lyric, phrase_notes)
+            if distance <= max_nearest_distance_ms:
+                matched_notes = [nearest_note]
+                warnings.append(f"lyric matched to nearest note at distance {distance}ms")
+            else:
+                warnings.append(f"nearest note is {distance}ms away, above threshold {max_nearest_distance_ms}ms")
+
+        if not matched_notes:
+            warnings.append("no note match found")
+            continue
+
+        alignments.append(
+            LyricNoteAlignment(
+                alignment_id=f"align_{index:03d}",
+                lyric_id=lyric.fragment_id,
+                note_ids=[note.fragment_id for note in matched_notes],
+                warnings=warnings,
+            )
+        )
+
+    return alignments
+
+
+def _overlap_ms(left: AlignedFragment, right: AlignedFragment) -> int:
+    return max(0, min(left.global_end_ms, right.global_end_ms) - max(left.global_start_ms, right.global_start_ms))
+
+
+def _nearest_note(lyric: AlignedFragment, notes: list[AlignedFragment]) -> tuple[AlignedFragment, int]:
+    lyric_center = (lyric.global_start_ms + lyric.global_end_ms) // 2
+    nearest = min(notes, key=lambda note: abs(((note.global_start_ms + note.global_end_ms) // 2) - lyric_center))
+    distance = abs(((nearest.global_start_ms + nearest.global_end_ms) // 2) - lyric_center)
+    return nearest, distance

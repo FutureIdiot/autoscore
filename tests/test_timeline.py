@@ -3,12 +3,14 @@ import unittest
 from autoscore.core.artifacts import ArtifactRef
 from autoscore.packages.timeline import (
     AlignedFragment,
+    LyricNoteAlignment,
     PhraseAlignment,
     PhraseSlice,
     TempoCandidate,
     TempoTimeline,
     TimedFragment,
     align_fragments,
+    match_lyrics_to_notes,
     ms_to_tick,
     stitch_fragments,
     tick_to_ms,
@@ -89,6 +91,116 @@ class PhraseAlignmentTests(unittest.TestCase):
         self.assertEqual(aligned[0].global_start_ms, 1000)
         self.assertEqual(aligned[0].global_end_ms, 1333)
         self.assertEqual(aligned[0].to_dict()["globalStartMs"], 1000)
+
+    def test_matches_one_lyric_to_multiple_overlapping_notes(self) -> None:
+        lyric = AlignedFragment(
+            fragment_id="lyric_001",
+            phrase_id="phrase_001",
+            local_start_ms=100,
+            local_end_ms=500,
+            unaligned_global_start_ms=1100,
+            unaligned_global_end_ms=1500,
+            global_start_ms=1000,
+            global_end_ms=1400,
+            source="lyricfa",
+        )
+        first_note = AlignedFragment(
+            fragment_id="note_001",
+            phrase_id="phrase_001",
+            local_start_ms=100,
+            local_end_ms=250,
+            unaligned_global_start_ms=1100,
+            unaligned_global_end_ms=1250,
+            global_start_ms=1000,
+            global_end_ms=1150,
+            source="game",
+        )
+        second_note = AlignedFragment(
+            fragment_id="note_002",
+            phrase_id="phrase_001",
+            local_start_ms=260,
+            local_end_ms=520,
+            unaligned_global_start_ms=1260,
+            unaligned_global_end_ms=1520,
+            global_start_ms=1160,
+            global_end_ms=1420,
+            source="game",
+        )
+
+        alignments = match_lyrics_to_notes([lyric], [second_note, first_note])
+
+        self.assertEqual(len(alignments), 1)
+        self.assertEqual(alignments[0].lyric_id, "lyric_001")
+        self.assertEqual(alignments[0].note_ids, ["note_001", "note_002"])
+        self.assertEqual(alignments[0].warnings, [])
+
+    def test_matches_nearest_note_when_no_note_overlaps(self) -> None:
+        lyric = AlignedFragment(
+            fragment_id="lyric_001",
+            phrase_id="phrase_001",
+            local_start_ms=100,
+            local_end_ms=200,
+            unaligned_global_start_ms=1100,
+            unaligned_global_end_ms=1200,
+            global_start_ms=1000,
+            global_end_ms=1100,
+            source="lyricfa",
+        )
+        note = AlignedFragment(
+            fragment_id="note_001",
+            phrase_id="phrase_001",
+            local_start_ms=250,
+            local_end_ms=350,
+            unaligned_global_start_ms=1250,
+            unaligned_global_end_ms=1350,
+            global_start_ms=1150,
+            global_end_ms=1250,
+            source="game",
+        )
+
+        alignments = match_lyrics_to_notes([lyric], [note], max_nearest_distance_ms=200)
+
+        self.assertEqual(alignments[0].note_ids, ["note_001"])
+        self.assertTrue(any("nearest note" in warning for warning in alignments[0].warnings))
+
+    def test_skips_lyric_when_nearest_note_exceeds_threshold(self) -> None:
+        lyric = AlignedFragment(
+            fragment_id="lyric_001",
+            phrase_id="phrase_001",
+            local_start_ms=100,
+            local_end_ms=200,
+            unaligned_global_start_ms=1100,
+            unaligned_global_end_ms=1200,
+            global_start_ms=1000,
+            global_end_ms=1100,
+            source="lyricfa",
+        )
+        note = AlignedFragment(
+            fragment_id="note_001",
+            phrase_id="phrase_001",
+            local_start_ms=800,
+            local_end_ms=900,
+            unaligned_global_start_ms=1800,
+            unaligned_global_end_ms=1900,
+            global_start_ms=1800,
+            global_end_ms=1900,
+            source="game",
+        )
+
+        self.assertEqual(match_lyrics_to_notes([lyric], [note], max_nearest_distance_ms=100), [])
+
+    def test_lyric_note_alignment_round_trip_uses_contract_names(self) -> None:
+        alignment = LyricNoteAlignment(
+            alignment_id="align_001",
+            lyric_id="lyric_001",
+            note_ids=["note_001", "note_002"],
+            warnings=["uncertain"],
+        )
+        data = alignment.to_dict()
+
+        self.assertEqual(data["lyricId"], "lyric_001")
+        self.assertEqual(data["noteIds"], ["note_001", "note_002"])
+        self.assertEqual(LyricNoteAlignment.from_dict(data), alignment)
 
 
 class StitchTimelineTests(unittest.TestCase):
