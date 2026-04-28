@@ -1,0 +1,82 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from autoscore.core.artifacts import ArtifactRef
+from autoscore.core.projects import ProjectManifest
+from autoscore.runtime import AutoscoreController, NodeRegistration
+
+
+class AutoscoreControllerTests(unittest.TestCase):
+    def test_lists_default_local_nodes(self) -> None:
+        nodes = AutoscoreController().list_nodes()
+
+        self.assertIn("timeline-local", {node.node_id for node in nodes})
+        timeline_node = next(node for node in nodes if node.node_id == "timeline-local")
+        self.assertIn("tempo-node", timeline_node.capabilities)
+        self.assertIn("stitchPhrases", timeline_node.supported_tasks)
+        self.assertEqual(timeline_node.transport, "local")
+
+    def test_accepts_explicit_node_registry(self) -> None:
+        controller = AutoscoreController(
+            nodes=[
+                NodeRegistration(
+                    node_id="custom-node",
+                    package_id="custom-package",
+                    capabilities=("custom-node",),
+                    supported_tasks=("customTask",),
+                    transport="http",
+                    endpoint="http://127.0.0.1:8710",
+                )
+            ]
+        )
+
+        self.assertEqual(controller.list_nodes()[0].node_id, "custom-node")
+
+    def test_lists_projects_from_workspace_manifests(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            manifest = ProjectManifest(project_id="project_001", project_dir="workspaces/project_001")
+            manifest.register_artifact(
+                ArtifactRef(
+                    artifact_id="artifact_original_audio",
+                    kind="audio/wav",
+                    relative_path="input/original_audio.wav",
+                )
+            )
+            manifest.set_step_status("createProject", "succeeded", output_artifact_ids=["artifact_original_audio"])
+            project_dir = workspace / "project_001"
+            manifest.save(project_dir / "manifest.json")
+
+            projects = AutoscoreController(workspace).list_projects()
+
+        self.assertEqual(len(projects), 1)
+        self.assertEqual(projects[0].project_id, "project_001")
+        self.assertEqual(projects[0].step_count, 1)
+        self.assertEqual(projects[0].artifact_count, 1)
+
+    def test_get_project_status_returns_steps_and_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            manifest = ProjectManifest(project_id="project_001", project_dir="workspaces/project_001")
+            manifest.register_artifact(
+                ArtifactRef(
+                    artifact_id="artifact_original_audio",
+                    kind="audio/wav",
+                    relative_path="input/original_audio.wav",
+                )
+            )
+            manifest.set_step_status("createProject", "succeeded", output_artifact_ids=["artifact_original_audio"])
+            project_dir = workspace / "project_001"
+            manifest.save(project_dir / "manifest.json")
+
+            status = AutoscoreController(workspace).get_project_status("project_001")
+
+        self.assertEqual(status.summary.project_id, "project_001")
+        self.assertEqual(status.artifact_ids, ["artifact_original_audio"])
+        self.assertEqual(status.steps[0].task_type, "createProject")
+        self.assertEqual(status.steps[0].status, "succeeded")
+
+
+if __name__ == "__main__":
+    unittest.main()

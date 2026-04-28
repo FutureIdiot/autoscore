@@ -12,5 +12,8 @@ dependencies = []
 [project.optional-dependencies]
 dev = ["pytest"]
 
+[project.scripts]
+autoscore = "autoscore.cli.main:main"
+
 [tool.setuptools.packages.find]
 include = ["autoscore*"]
