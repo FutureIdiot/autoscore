@@ -65,6 +65,72 @@ score-export-package
   score-json-node
 ```
 
+## Node Registry and Task Mapping
+
+Remote node control should use the same three-level mapping as the local
+development registry:
+
+```text
+deployment package -> node capability -> task type
+```
+
+This mapping is a protocol boundary, not only a TUI display detail. Registry
+records must be serializable so a controller can load local JSON/TOML config
+today and later accept remote worker registration messages with the same shape.
+
+A serialized node registration should preserve these stable fields:
+
+```json
+{
+  "nodeId": "timeline-local",
+  "packageId": "timeline-package",
+  "packageVersion": "0.1.0",
+  "capabilities": ["tempo-node", "phrase-node"],
+  "supportedTasks": ["estimateTempo", "detectPhrases"],
+  "transport": "local",
+  "endpoint": "local://autoscore.packages.timeline",
+  "status": "online",
+  "lastSeenAt": null,
+  "schemaVersions": [1],
+  "artifactKinds": ["audio/wav", "text/plain", "application/json"],
+  "runtime": {"python": "3.12"},
+  "backends": {"mock": true},
+  "models": {},
+  "metadata": {}
+}
+```
+
+Deserialization should rebuild controller-visible `NodeRegistration` records
+and keep enough package metadata to answer three scheduling questions:
+
+1. Which task type did the user or scheduler request?
+2. Which node capabilities can execute that task type?
+3. Which deployment package, transport, and endpoint should receive the task
+   envelope?
+
+The task type remains the command-level unit. Required and optional artifact
+contracts belong to task definitions, not to project manifests. When the TUI
+resolves `send 2` or `send detectPhrases`, the controller maps that target to a
+task type, checks the task artifact contract, binds any pending input needed by
+that task, and then builds a `TaskEnvelope` for a node that supports the task.
+
+Project manifests should store durable project state: artifacts, steps, manual
+metadata, warnings, and errors. They should not store machine-specific runtime
+details such as absolute model paths, temporary worker process state, local
+cache paths, or live health-check results. Those belong in deployment config,
+node registry records, heartbeat state, or execution provenance attached to an
+individual step.
+
+Future remote registries should add live health signals without changing the
+core mapping shape:
+
+- heartbeat timestamp and timeout policy;
+- accepted schema versions;
+- supported artifact transports;
+- supported backends and model variants;
+- current status such as `online`, `degraded`, `busy`, `offline`, or
+  `unconfigured`.
+
 ## Controller Boundary
 
 UI layers must call the runtime controller instead of embedding pipeline logic:

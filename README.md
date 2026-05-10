@@ -74,17 +74,25 @@ Current TUI command shape:
 
 ```text
 create[!]             create workspaces from inbox/importDir, or an empty workspace when no files exist
+info                  view or edit current project tempo and meter
 send                  send current project artifacts through the ready mock pipeline
-send TASK             send current artifacts to one task only, e.g. send detectPhrases
-send TASK&            send to TASK and continue through downstream ready tasks
-send TASK!            force rerun TASK
-send TASK&!           force rerun TASK and continue downstream
+send #                send to the numbered node task shown in the TUI
+send #&               send to # and continue through downstream ready tasks
+send #!               force rerun #
+send TASK             send current artifacts to one named task, e.g. send detectPhrases
 ```
 
-The `create` command creates project control state first. Sending to a task is a
-separate step. Task readiness is based on required artifacts only; optional
-context such as lyrics, manual metadata, or tempo may be absent and should
-surface as task warnings instead of blocking execution.
+The `create` command creates project control state first and keeps discovered
+input audio as pending project input rather than guessing its artifact role.
+Sending to a task is a separate step. When a task requires audio that has not
+yet been registered as an artifact, the controller binds a matching pending
+input to that task's required artifact, for example `artifact_original_audio`
+for `separateAudio` or `artifact_vocals_wav` for `detectPhrases`.
+
+Task readiness is based on required artifacts only; optional context such as
+lyrics, manual metadata, or tempo may be absent and should surface as task
+warnings instead of blocking execution. The project `info` command can update
+manual tempo and meter after creation.
 
 ## Current Runtime Model
 
@@ -122,6 +130,8 @@ communicate with.
 - CLI project creation and TUI create/send project workflow.
 - Local artifact registry and materialization.
 - Artifact-driven task dispatch with required and optional input contracts.
+- Pending input binding at send time for task-specific audio artifact roles.
+- TUI project info view/edit for manual tempo and meter.
 - Empty project creation, provided artifact attachment, provided vocals, and
   provided tempo timeline support.
 - Mock `separateAudio`, `estimateTempo`, and `detectPhrases` runners wired
@@ -145,12 +155,10 @@ communicate with.
 - Score schema models and score JSON export.
 - WebUI.
 
-## Recommended Next Steps
+## Next Steps
 
-1. Replace create-time audio role guessing with pending input binding: `create`
-   should only register incoming files as unbound project inputs, and `send`
-   should bind them to artifacts according to the target node's required inputs.
-2. Add mock outputs for `runGame`, `runLyricFA`, `alignPhrase`,
+1. Add mock outputs for `runGame`, `runLyricFA`, `alignPhrase`,
    `stitchPhrases`, and `buildScoreJson`.
-3. Build an end-to-end mock pipeline before integrating GAME, LyricFA, or
+2. Build an end-to-end mock pipeline before integrating GAME, LyricFA, or
    heavy audio dependencies.
+3. Add clearer rerun/resume behavior once more downstream steps exist.
