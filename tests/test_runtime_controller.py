@@ -136,6 +136,37 @@ class AutoscoreControllerTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 controller.create_project(project_id="demo", audio_path=source_audio, lyrics_text="hello")
 
+    def test_run_step_separate_audio_creates_mock_stems(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            controller = AutoscoreController(workspace)
+            controller.create_project(project_id="demo", audio_path=source_audio, lyrics_text="hello")
+
+            result = controller.run_step("demo", "separateAudio")
+            manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
+
+            self.assertEqual(result.status, "succeeded")
+            self.assertEqual(manifest.steps["separateAudio"].status, "succeeded")
+            self.assertEqual(
+                manifest.steps["separateAudio"].output_artifact_ids,
+                ["artifact_vocals_wav", "artifact_accompaniment_wav"],
+            )
+            self.assertEqual((workspace / "demo" / "audio" / "vocals.wav").read_bytes(), b"audio")
+            self.assertEqual((workspace / "demo" / "audio" / "accompaniment.wav").read_bytes(), b"audio")
+
+    def test_run_step_rejects_unknown_task_type(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            controller = AutoscoreController(workspace)
+            controller.create_project(project_id="demo", audio_path=source_audio, lyrics_text="hello")
+
+            with self.assertRaises(NotImplementedError):
+                controller.run_step("demo", "missingTask")
+
     def test_cli_create_project(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir) / "workspaces"

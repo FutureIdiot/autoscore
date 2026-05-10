@@ -11,6 +11,8 @@ from autoscore.config import AppConfig, load_app_config
 from autoscore.core.artifacts import LocalArtifactStore
 from autoscore.core.projects import ProjectManifest
 from autoscore.runtime.registry import NodeRegistration, default_local_nodes
+from autoscore.runtime.runners import build_task_envelope, get_local_runner, input_artifact_ids_for_task
+from autoscore.runtime.tasks import TaskResult
 
 _PROJECT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
@@ -254,14 +256,46 @@ class AutoscoreController:
             errors=list(manifest.errors),
         )
 
-    def run_step(self, project_id: str, task_type: str) -> None:
-        """Run one project step.
+    def run_step(self, project_id: str, task_type: str) -> TaskResult:
+        """Run one project step and persist manifest changes."""
 
-        Runners are intentionally not wired yet. TUI and WebUI can call this
-        method later without changing their UI-facing contract.
-        """
+        manifest_path = self._manifest_path(project_id)
+        manifest = ProjectManifest.load(manifest_path)
+        store = LocalArtifactStore(manifest.project_dir)
+        input_artifact_ids = input_artifact_ids_for_task(task_type)
+        input_artifacts = [manifest.get_artifact(artifact_id) for artifact_id in input_artifact_ids]
+        runner = get_local_runner(task_type)
+        envelope = build_task_envelope(
+            project_id=manifest.project_id,
+            task_type=task_type,
+            input_artifacts=input_artifacts,
+        )
 
-        raise NotImplementedError(f"runner for task type {task_type!r} is not implemented")
+        manifest.set_step_status(
+            task_type,
+            "running",
+            input_artifact_ids=input_artifact_ids,
+            output_artifact_ids=[],
+            warnings=[],
+            errors=[],
+            execution=envelope.execution.to_dict(),
+        )
+        manifest.save(manifest_path)
+
+        result = runner(envelope, store)
+        for artifact in result.output_artifacts:
+            manifest.register_artifact(artifact)
+        manifest.set_step_status(
+            task_type,
+            result.status,
+            input_artifact_ids=input_artifact_ids,
+            output_artifact_ids=[artifact.artifact_id for artifact in result.output_artifacts],
+            warnings=[_problem_to_message(warning) for warning in result.warnings],
+            errors=[_problem_to_message(error) for error in result.errors],
+            execution=result.execution.to_dict(),
+        )
+        manifest.save(manifest_path)
+        return result
 
     def _manifest_path(self, project_id: str) -> Path:
         if not project_id:
@@ -334,3 +368,9 @@ def project_id_from_name(name: str) -> str:
     if not project_id:
         raise ValueError("name does not contain a usable project id")
     return project_id
+
+
+def _problem_to_message(problem: object) -> str:
+    code = getattr(problem, "code", "")
+    message = getattr(problem, "message", str(problem))
+    return f"{code}: {message}" if code else message

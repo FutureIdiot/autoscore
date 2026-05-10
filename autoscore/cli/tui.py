@@ -51,11 +51,31 @@ def _project_screen(controller: AutoscoreController, project_id: str) -> None:
         _clear_screen()
         _print_project_status(status)
         print()
-        choice = _prompt("b=back, r=refresh, q=quit: ").strip().lower()
-        if choice == "b":
+        choice = _prompt("s=run separateAudio, run <task>, b=back, r=refresh, q=quit: ").strip()
+        normalized = choice.lower()
+        if normalized == "b":
             return
-        if choice == "q":
+        if normalized == "q":
             raise SystemExit(0)
+        if normalized in {"", "r"}:
+            continue
+        if normalized == "s":
+            _run_step(controller, project_id, "separateAudio")
+            continue
+        if normalized.startswith("run "):
+            task_type = choice[4:].strip()
+            if task_type:
+                _run_step(controller, project_id, task_type)
+
+
+def _run_step(controller: AutoscoreController, project_id: str, task_type: str) -> None:
+    try:
+        result = controller.run_step(project_id, task_type)
+    except Exception as exc:
+        print(f"Failed: {exc}")
+    else:
+        print(f"{result.task_type}: {result.status}")
+    _prompt("Press Enter to continue: ")
 
 
 def _create_from_import_dir(controller: AutoscoreController, *, overwrite: bool = False) -> None:

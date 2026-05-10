@@ -16,16 +16,16 @@ older private implementation lists that may exist locally under
 - Dependency-free development CLI/TUI shell.
 - Local artifact registry and materialization.
 - CLI project creation and TUI import-directory project creation.
+- Mock `separateAudio` runner wired through controller/TUI step execution.
 - Timeline foundation models and tests.
 
 ## Next Steps
 
-1. Mock Task Runners
+1. Expand Mock Task Runners
 
-   Add local/mock runners for the major task types:
+   Add local/mock runners for the remaining major task types:
 
    ```text
-   separateAudio
    estimateTempo
    detectPhrases
    runGame
@@ -35,28 +35,23 @@ older private implementation lists that may exist locally under
    buildScoreJson
    ```
 
-2. Controller/TUI Step Execution
-
-   Wire `AutoscoreController.run_step()` to task runners so the TUI can trigger
-   a selected step and immediately show manifest/artifact changes.
-
-3. End-to-End Mock Pipeline
+2. End-to-End Mock Pipeline
 
    Run a full project through mock separator, mock timeline, mock GAME, mock
    LyricFA, alignment, stitching, and placeholder score export.
 
-4. Real Timeline Analysis
+3. Real Timeline Analysis
 
    Add tempo and phrase detection backends. Start with lightweight mocked or
    librosa-based behavior, then evaluate Essentia when needed.
 
-5. External Integrations
+4. External Integrations
 
    Integrate GAME and LyricFA behind their package boundaries. Keep their local
    Python paths and model paths in package config or provenance, not in project
    manifests.
 
-6. Score Export
+5. Score Export
 
    Implement canonical score schema models, validation, bar generation, and
    `score.json` export after the mock pipeline is stable.
