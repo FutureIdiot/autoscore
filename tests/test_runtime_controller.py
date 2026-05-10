@@ -288,8 +288,8 @@ class AutoscoreControllerTests(unittest.TestCase):
         self.assertTrue(readiness["separateAudio"].ready)
         self.assertTrue(readiness["estimateTempo"].ready)
         self.assertFalse(readiness["detectPhrases"].ready)
-        self.assertEqual(readiness["detectPhrases"].missing_input_artifact_ids, ["artifact_vocals_wav", "artifact_tempo_timeline_json"])
-        self.assertEqual(readiness["detectPhrases"].missing_optional_artifact_ids, [])
+        self.assertEqual(readiness["detectPhrases"].missing_input_artifact_ids, ["artifact_vocals_wav"])
+        self.assertEqual(readiness["detectPhrases"].missing_optional_artifact_ids, ["artifact_tempo_timeline_json"])
         self.assertEqual(readiness["detectPhrases"].node_id, "timeline-local")
 
     def test_estimate_tempo_runs_without_manual_metadata_with_warning(self) -> None:
@@ -345,12 +345,31 @@ class AutoscoreControllerTests(unittest.TestCase):
         self.assertTrue(any(warning.code == "phrases.missing_metadata" for warning in result.warnings))
         self.assertTrue(any("phrases.missing_lyrics" in warning for warning in loaded.steps["detectPhrases"].warnings))
 
+    def test_detect_phrases_runs_without_tempo_with_default_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            vocals = Path(temp_dir) / "vocals.wav"
+            vocals.write_bytes(b"vocals")
+            controller = AutoscoreController(workspace)
+            manifest = controller.create_empty_project(project_id="demo")
+            controller.attach_artifact(
+                manifest.project_id,
+                source_path=vocals,
+                artifact_id="artifact_vocals_wav",
+                kind="audio/wav",
+                relative_path="audio/vocals.wav",
+            )
+
+            result = controller.run_step("demo", "detectPhrases")
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertTrue(any(warning.code == "phrases.missing_tempo" for warning in result.warnings))
+
     def test_detect_phrases_fails_when_required_vocals_are_missing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir) / "workspaces"
             controller = AutoscoreController(workspace)
             controller.create_empty_project(project_id="demo")
-            controller.provide_tempo_timeline("demo", global_tempo=120)
 
             with self.assertRaisesRegex(KeyError, "artifact_vocals_wav"):
                 controller.run_step("demo", "detectPhrases")

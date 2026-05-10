@@ -119,8 +119,8 @@ _INPUT_ARTIFACT_SPECS = {
         optional=("artifact_manual_metadata_json",),
     ),
     "detectPhrases": TaskInputSpec(
-        required=("artifact_vocals_wav", "artifact_tempo_timeline_json"),
-        optional=("artifact_lyrics_txt", "artifact_manual_metadata_json"),
+        required=("artifact_vocals_wav",),
+        optional=("artifact_tempo_timeline_json", "artifact_lyrics_txt", "artifact_manual_metadata_json"),
     ),
 }
 

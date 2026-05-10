@@ -104,12 +104,21 @@ def run_mock_phrase_detector(envelope: Any, store: LocalArtifactStore) -> Any:
 
     warnings = []
     vocals_artifact = _find_required_input_artifact(envelope, "artifact_vocals_wav")
-    tempo_artifact = _find_required_input_artifact(envelope, "artifact_tempo_timeline_json")
+    tempo_artifact = _find_optional_input_artifact(envelope, "artifact_tempo_timeline_json")
     lyrics_artifact = _find_optional_input_artifact(envelope, "artifact_lyrics_txt")
     metadata_artifact = _find_optional_input_artifact(envelope, "artifact_manual_metadata_json")
 
     vocals_path = store.materialize(vocals_artifact)
-    tempo_data = json.loads(store.materialize(tempo_artifact).read_text(encoding="utf-8"))
+    if tempo_artifact is None:
+        tempo_data = {"globalTempo": 120}
+        warnings.append(
+            ProblemRecord.warning(
+                "phrases.missing_tempo",
+                "tempo timeline was not provided; detectPhrases defaulted to 120 BPM",
+            )
+        )
+    else:
+        tempo_data = json.loads(store.materialize(tempo_artifact).read_text(encoding="utf-8"))
     if metadata_artifact is None:
         metadata = {}
         warnings.append(

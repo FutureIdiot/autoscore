@@ -40,7 +40,7 @@ def run_tui(controller: AutoscoreController) -> None:
             )
         print()
         choice = _prompt(
-            "Project #, create[!], [h] help, [r] refresh, [q] quit: "
+            "Project #/name, create[!], [h] help, [r] refresh, [q] quit: "
         ).strip().lower()
         if choice == "q":
             return
@@ -52,9 +52,10 @@ def run_tui(controller: AutoscoreController) -> None:
             continue
         if choice in {"", "r"}:
             continue
-        if not choice.isdigit() or not 1 <= int(choice) <= len(projects):
+        project_id = _parse_project_selection(choice, project_ids=[project.project_id for project in projects])
+        if project_id is None:
             continue
-        _project_screen(controller, projects[int(choice) - 1].project_id)
+        _project_screen(controller, project_id)
 
 
 def _project_screen(controller: AutoscoreController, project_id: str) -> None:
@@ -83,6 +84,23 @@ def _project_screen(controller: AutoscoreController, project_id: str) -> None:
             _send_to_nodes(controller, project_id, choice)
 
 
+def _parse_project_selection(choice: str, *, project_ids: list[str]) -> str | None:
+    normalized = choice.strip().lower()
+    if normalized.startswith("project "):
+        normalized = normalized.removeprefix("project ").strip()
+    if normalized.startswith("#"):
+        normalized = normalized[1:].strip()
+    if normalized.isdigit():
+        index = int(normalized)
+        if 1 <= index <= len(project_ids):
+            return project_ids[index - 1]
+        return None
+    for project_id in project_ids:
+        if normalized == project_id.lower():
+            return project_id
+    return None
+
+
 def _run_step(controller: AutoscoreController, project_id: str, task_type: str) -> None:
     try:
         result = controller.run_step(project_id, task_type)
@@ -96,6 +114,8 @@ def _run_step(controller: AutoscoreController, project_id: str, task_type: str) 
 def _send_to_nodes(controller: AutoscoreController, project_id: str, command: str, *, pause: bool = True) -> None:
     try:
         task_type, continue_pipeline, force = _parse_send_command(command)
+        _ensure_required_inputs(controller, project_id, task_type)
+        _prepare_task_context(controller, project_id, task_type)
         results = controller.send_to_task(
             project_id,
             task_type=task_type,
@@ -111,6 +131,44 @@ def _send_to_nodes(controller: AutoscoreController, project_id: str, command: st
             print(f"{result.execution.node_id}: {result.task_type} -> {result.status}")
     if pause:
         _prompt("Press Enter to continue: ")
+
+
+def _ensure_required_inputs(controller: AutoscoreController, project_id: str, task_type: str | None) -> None:
+    if task_type is None:
+        return
+    status = controller.get_project_status(project_id)
+    readiness = next((task for task in status.task_readiness if task.task_type == task_type), None)
+    if readiness is None or not readiness.missing_input_artifact_ids:
+        return
+    missing = ", ".join(readiness.missing_input_artifact_ids)
+    suggestion = _suggest_upstream_send(task_type, readiness.missing_input_artifact_ids)
+    message = f"{task_type} is missing required input artifact(s): {missing}"
+    if suggestion:
+        message += f". Try `{suggestion}`."
+    raise ValueError(message)
+
+
+def _suggest_upstream_send(task_type: str, missing_artifact_ids: list[str]) -> str:
+    if task_type == "detectPhrases" and "artifact_vocals_wav" in missing_artifact_ids:
+        return "send separateAudio&"
+    if task_type == "estimateTempo" and "artifact_original_audio" in missing_artifact_ids:
+        return "create"
+    if task_type == "separateAudio" and "artifact_original_audio" in missing_artifact_ids:
+        return "create"
+    return ""
+
+
+def _prepare_task_context(controller: AutoscoreController, project_id: str, task_type: str | None) -> None:
+    if task_type != "detectPhrases":
+        return
+    status = controller.get_project_status(project_id)
+    if "artifact_tempo_timeline_json" in status.artifact_ids:
+        return
+    tempo = _prompt_optional_float(
+        "Tempo BPM for detectPhrases (blank=120 default): ",
+        field_name="tempo",
+    )
+    controller.provide_tempo_timeline(project_id, global_tempo=tempo)
 
 
 def _parse_send_command(command: str) -> tuple[str | None, bool, bool]:
