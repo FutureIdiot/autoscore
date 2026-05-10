@@ -13,7 +13,6 @@ from typing import Any
 
 from autoscore.core.artifacts import LocalArtifactStore
 from autoscore.core.problems import ProblemRecord
-from autoscore.runtime.tasks import ExecutionInfo, TaskEnvelope, TaskResult
 
 DEFAULT_TIMEBASE = 480
 
@@ -118,13 +117,24 @@ def tick_to_ms(tick: int | float, *, bpm: float, grid_offset_ms: float = 0, time
     return tick / timebase / bpm * 60000 + grid_offset_ms
 
 
-def run_mock_tempo_estimator(envelope: TaskEnvelope, store: LocalArtifactStore) -> TaskResult:
+def run_mock_tempo_estimator(envelope: Any, store: LocalArtifactStore) -> Any:
     """Write a deterministic tempo timeline artifact from manual metadata."""
 
-    metadata_artifact = _find_input_artifact(envelope, "artifact_manual_metadata_json")
-    metadata_path = store.materialize(metadata_artifact)
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    from autoscore.runtime.tasks import ExecutionInfo, TaskResult
+
     warnings = []
+    metadata_artifact = _find_input_artifact(envelope, "artifact_manual_metadata_json")
+    if metadata_artifact is None:
+        metadata = {}
+        warnings.append(
+            ProblemRecord.warning(
+                "tempo.missing_metadata",
+                "manual metadata was not provided; mock tempo will use defaults",
+            )
+        )
+    else:
+        metadata_path = store.materialize(metadata_artifact)
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     global_tempo = metadata.get("globalTempo")
     if global_tempo is None:
         global_tempo = 120
@@ -170,8 +180,8 @@ def run_mock_tempo_estimator(envelope: TaskEnvelope, store: LocalArtifactStore) 
     )
 
 
-def _find_input_artifact(envelope: TaskEnvelope, artifact_id: str):
+def _find_input_artifact(envelope: Any, artifact_id: str):
     for artifact in envelope.input_artifacts:
         if artifact.artifact_id == artifact_id:
             return artifact
-    raise KeyError(f"missing required input artifact: {artifact_id}")
+    return None

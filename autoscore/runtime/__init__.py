@@ -7,6 +7,7 @@ from autoscore.runtime.controller import (
     ProjectStatus,
     ProjectSummary,
     StepStatus,
+    TaskReadiness,
     project_id_from_name,
 )
 from autoscore.runtime.registry import NodeRegistration, default_local_nodes
@@ -21,6 +22,7 @@ __all__ = [
     "ProjectStatus",
     "ProjectSummary",
     "StepStatus",
+    "TaskReadiness",
     "TaskEnvelope",
     "TaskRequirements",
     "TaskResult",

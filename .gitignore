@@ -1,5 +1,6 @@
 __pycache__/
 *.py[cod]
+.DS_Store
 .designdocuments/
 .pytest_cache/
 .mypy_cache/
@@ -8,5 +9,7 @@ __pycache__/
 .venv/
 venv/
 config/autoscore.local.json
+inbox/*
+!inbox/.gitkeep
 workspaces/*
 !workspaces/.gitkeep

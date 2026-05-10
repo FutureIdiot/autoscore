@@ -127,6 +127,19 @@ class AutoscoreControllerTests(unittest.TestCase):
         self.assertEqual(copied_audio, b"audio")
         self.assertEqual(copied_lyrics, "hello world")
 
+    def test_create_empty_project_writes_manifest_without_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            controller = AutoscoreController(workspace)
+
+            manifest = controller.create_empty_project(project_id="empty")
+            loaded = ProjectManifest.load(workspace / "empty" / "manifest.json")
+
+        self.assertEqual(manifest.project_id, "empty")
+        self.assertEqual(loaded.artifacts, {})
+        self.assertEqual(loaded.steps["createProject"].status, "succeeded")
+        self.assertEqual(loaded.steps["createProject"].output_artifact_ids, [])
+
     def test_uses_configured_workspace_when_not_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir) / "configured-workspaces"
@@ -216,6 +229,294 @@ class AutoscoreControllerTests(unittest.TestCase):
         self.assertEqual(tempo_data["globalTempo"], 120)
         self.assertEqual(tempo_data["source"], "mock-default")
         self.assertTrue(any("mock tempo defaulted" in warning for warning in manifest.steps["estimateTempo"].warnings))
+
+    def test_run_step_detect_phrases_writes_mock_phrase_timeline(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            controller = AutoscoreController(workspace)
+            controller.create_project(
+                project_id="demo",
+                audio_path=source_audio,
+                lyrics_text="first line\nsecond line\n",
+                global_tempo=120,
+                meter={"numerator": 4, "denominator": 4},
+            )
+            controller.run_step("demo", "separateAudio")
+            controller.run_step("demo", "estimateTempo")
+
+            result = controller.run_step("demo", "detectPhrases")
+            manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
+            phrase_data = json.loads((workspace / "demo" / "timeline" / "phrases.json").read_text(encoding="utf-8"))
+            copied_phrase_audio = (workspace / "demo" / "phrases" / "phrase_001" / "vocals.wav").read_bytes()
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(manifest.steps["detectPhrases"].status, "succeeded")
+        self.assertEqual(
+            manifest.steps["detectPhrases"].output_artifact_ids,
+            [
+                "artifact_phrase_timeline_json",
+                "artifact_phrase_001_vocals_wav",
+                "artifact_phrase_002_vocals_wav",
+            ],
+        )
+        self.assertEqual(phrase_data["source"], "mock-bar-window")
+        self.assertEqual(phrase_data["meter"], {"numerator": 4, "denominator": 4})
+        self.assertEqual(len(phrase_data["phrases"]), 2)
+        self.assertEqual(phrase_data["phrases"][0]["phraseStartMs"], 0)
+        self.assertEqual(phrase_data["phrases"][0]["phraseEndMs"], 16000)
+        self.assertEqual(phrase_data["phrases"][0]["audioArtifact"]["artifactId"], "artifact_phrase_001_vocals_wav")
+        self.assertEqual(copied_phrase_audio, b"audio")
+
+    def test_project_status_reports_ready_tasks_by_available_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            controller = AutoscoreController(workspace)
+            controller.create_project(
+                project_id="demo",
+                audio_path=source_audio,
+                lyrics_text="line",
+                global_tempo=120,
+            )
+
+            status = controller.get_project_status("demo")
+            readiness = {task.task_type: task for task in status.task_readiness}
+
+        self.assertTrue(readiness["separateAudio"].ready)
+        self.assertTrue(readiness["estimateTempo"].ready)
+        self.assertFalse(readiness["detectPhrases"].ready)
+        self.assertEqual(readiness["detectPhrases"].missing_input_artifact_ids, ["artifact_vocals_wav", "artifact_tempo_timeline_json"])
+        self.assertEqual(readiness["detectPhrases"].missing_optional_artifact_ids, [])
+        self.assertEqual(readiness["detectPhrases"].node_id, "timeline-local")
+
+    def test_estimate_tempo_runs_without_manual_metadata_with_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            controller = AutoscoreController(workspace)
+            manifest = controller.create_empty_project(project_id="demo")
+            controller.attach_artifact(
+                manifest.project_id,
+                source_path=source_audio,
+                artifact_id="artifact_original_audio",
+                kind="audio/wav",
+                relative_path="input/original_audio.wav",
+            )
+
+            result = controller.run_step("demo", "estimateTempo")
+            loaded = ProjectManifest.load(workspace / "demo" / "manifest.json")
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertTrue(any(warning.code == "tempo.missing_metadata" for warning in result.warnings))
+        self.assertTrue(any("tempo.missing_metadata" in warning for warning in loaded.steps["estimateTempo"].warnings))
+
+    def test_detect_phrases_runs_without_optional_lyrics_or_metadata_with_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            vocals = Path(temp_dir) / "vocals.wav"
+            vocals.write_bytes(b"vocals")
+            controller = AutoscoreController(workspace)
+            manifest = controller.create_empty_project(project_id="demo")
+            controller.attach_artifact(
+                manifest.project_id,
+                source_path=vocals,
+                artifact_id="artifact_vocals_wav",
+                kind="audio/wav",
+                relative_path="audio/vocals.wav",
+            )
+            controller.provide_tempo_timeline("demo", global_tempo=120)
+
+            status = controller.get_project_status("demo")
+            readiness = {task.task_type: task for task in status.task_readiness}
+            result = controller.run_step("demo", "detectPhrases")
+            loaded = ProjectManifest.load(workspace / "demo" / "manifest.json")
+
+        self.assertTrue(readiness["detectPhrases"].ready)
+        self.assertEqual(
+            readiness["detectPhrases"].missing_optional_artifact_ids,
+            ["artifact_lyrics_txt", "artifact_manual_metadata_json"],
+        )
+        self.assertEqual(result.status, "succeeded")
+        self.assertTrue(any(warning.code == "phrases.missing_lyrics" for warning in result.warnings))
+        self.assertTrue(any(warning.code == "phrases.missing_metadata" for warning in result.warnings))
+        self.assertTrue(any("phrases.missing_lyrics" in warning for warning in loaded.steps["detectPhrases"].warnings))
+
+    def test_detect_phrases_fails_when_required_vocals_are_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            controller = AutoscoreController(workspace)
+            controller.create_empty_project(project_id="demo")
+            controller.provide_tempo_timeline("demo", global_tempo=120)
+
+            with self.assertRaisesRegex(KeyError, "artifact_vocals_wav"):
+                controller.run_step("demo", "detectPhrases")
+
+    def test_activate_ready_tasks_runs_pipeline_until_no_ready_unfinished_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            controller = AutoscoreController(workspace)
+            controller.create_project(
+                project_id="demo",
+                audio_path=source_audio,
+                lyrics_text="line",
+                global_tempo=120,
+            )
+
+            results = controller.activate_ready_tasks("demo")
+            manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
+
+        self.assertEqual([result.task_type for result in results], ["separateAudio", "estimateTempo", "detectPhrases"])
+        self.assertEqual(manifest.steps["detectPhrases"].status, "succeeded")
+        self.assertIn("artifact_phrase_timeline_json", manifest.artifacts)
+
+    def test_send_to_task_without_task_runs_ready_pipeline_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            controller = AutoscoreController(workspace)
+            controller.create_project(
+                project_id="demo",
+                audio_path=source_audio,
+                lyrics_text="line",
+                global_tempo=120,
+            )
+
+            results = controller.send_to_task("demo")
+
+        self.assertEqual([result.task_type for result in results], ["separateAudio", "estimateTempo", "detectPhrases"])
+
+    def test_send_to_task_runs_only_requested_task_without_continue(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            controller = AutoscoreController(workspace)
+            controller.create_project(
+                project_id="demo",
+                audio_path=source_audio,
+                lyrics_text="line",
+                global_tempo=120,
+            )
+            controller.run_step("demo", "separateAudio")
+
+            results = controller.send_to_task("demo", task_type="estimateTempo")
+            manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
+
+        self.assertEqual([result.task_type for result in results], ["estimateTempo"])
+        self.assertNotIn("detectPhrases", manifest.steps)
+
+    def test_send_to_task_can_force_rerun_from_requested_task_and_continue(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            controller = AutoscoreController(workspace)
+            controller.create_project(
+                project_id="demo",
+                audio_path=source_audio,
+                lyrics_text="line",
+                global_tempo=120,
+            )
+            controller.activate_ready_tasks("demo")
+
+            results = controller.send_to_task(
+                "demo",
+                task_type="detectPhrases",
+                continue_pipeline=True,
+                force=True,
+            )
+
+        self.assertEqual([result.task_type for result in results], ["detectPhrases"])
+
+    def test_create_project_from_provided_vocals_can_run_detect_phrases_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            vocals = Path(temp_dir) / "vocals.wav"
+            vocals.write_bytes(b"vocals")
+            controller = AutoscoreController(workspace)
+
+            controller.create_project_from_provided_vocals(
+                project_id="direct",
+                vocals_path=vocals,
+                global_tempo=120,
+                meter={"numerator": 4, "denominator": 4},
+            )
+            result = controller.run_step("direct", "detectPhrases")
+            manifest = ProjectManifest.load(workspace / "direct" / "manifest.json")
+            phrase_data = json.loads((workspace / "direct" / "timeline" / "phrases.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertIn("artifact_vocals_wav", manifest.artifacts)
+        self.assertIn("artifact_tempo_timeline_json", manifest.artifacts)
+        self.assertEqual(manifest.artifacts["artifact_vocals_wav"].metadata["providedAs"], "vocals")
+        self.assertEqual(phrase_data["phrases"][0]["audioArtifact"]["artifactId"], "artifact_phrase_001_vocals_wav")
+
+    def test_attach_artifact_allows_downstream_steps_to_use_provided_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            provided_vocals = Path(temp_dir) / "provided-vocals.wav"
+            provided_vocals.write_bytes(b"provided")
+            controller = AutoscoreController(workspace)
+            controller.create_project(
+                project_id="demo",
+                audio_path=source_audio,
+                lyrics_text="line",
+                global_tempo=120,
+            )
+            controller.run_step("demo", "estimateTempo")
+
+            controller.attach_artifact(
+                "demo",
+                source_path=provided_vocals,
+                artifact_id="artifact_vocals_wav",
+                kind="audio/wav",
+                relative_path="audio/vocals.wav",
+                metadata={"providedAs": "vocals"},
+            )
+            result = controller.run_step("demo", "detectPhrases")
+            copied_vocals = (workspace / "demo" / "audio" / "vocals.wav").read_bytes()
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(copied_vocals, b"provided")
+
+    def test_provide_tempo_timeline_allows_detect_phrases_with_vocals_and_manual_tempo(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            provided_vocals = Path(temp_dir) / "provided-vocals.wav"
+            provided_vocals.write_bytes(b"provided")
+            controller = AutoscoreController(workspace)
+            controller.create_project(
+                project_id="demo",
+                audio_path=source_audio,
+                lyrics_text="line",
+                global_tempo=132,
+            )
+            controller.attach_artifact(
+                "demo",
+                source_path=provided_vocals,
+                artifact_id="artifact_vocals_wav",
+                kind="audio/wav",
+                relative_path="audio/vocals.wav",
+                metadata={"providedAs": "vocals"},
+            )
+            controller.provide_tempo_timeline("demo", global_tempo=132)
+
+            result = controller.send_to_task("demo", task_type="detectPhrases")
+            phrase_data = json.loads((workspace / "demo" / "timeline" / "phrases.json").read_text(encoding="utf-8"))
+
+        self.assertEqual([item.task_type for item in result], ["detectPhrases"])
+        self.assertEqual(phrase_data["barDurationMs"], 1818.1818181818182)
 
     def test_cli_create_project(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

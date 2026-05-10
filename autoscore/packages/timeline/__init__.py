@@ -18,7 +18,7 @@ from autoscore.packages.timeline.align import (
     align_fragments,
     match_lyrics_to_notes,
 )
-from autoscore.packages.timeline.phrases import PhraseSlice
+from autoscore.packages.timeline.phrases import PhraseSlice, run_mock_phrase_detector
 from autoscore.packages.timeline.stitch import StitchedTimeline, stitch_fragments
 from autoscore.packages.timeline.tempo import DEFAULT_TIMEBASE, TempoCandidate, TempoTimeline, ms_to_tick, tick_to_ms
 
@@ -35,6 +35,7 @@ __all__ = [
     "align_fragments",
     "match_lyrics_to_notes",
     "ms_to_tick",
+    "run_mock_phrase_detector",
     "stitch_fragments",
     "tick_to_ms",
 ]
