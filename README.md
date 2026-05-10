@@ -106,7 +106,7 @@ communicate with.
 - Dependency-free CLI/TUI shell.
 - CLI project creation and TUI import-directory project creation.
 - Local artifact registry and materialization.
-- Mock `separateAudio` runner wired through controller/TUI step execution.
+- Mock `separateAudio` and `estimateTempo` runners wired through controller/TUI step execution.
 - Timeline foundation models:
   - tempo ms/tick conversion;
   - phrase slice metadata;
@@ -118,7 +118,7 @@ communicate with.
 ## Not Implemented Yet
 
 - DAG scheduler and rerun/resume behavior.
-- Mock runners beyond `separateAudio`.
+- Mock runners beyond `separateAudio` and `estimateTempo`.
 - Real separator backend.
 - Real or mocked tempo/phrase audio analysis.
 - Real GAME adapter.
@@ -128,8 +128,8 @@ communicate with.
 
 ## Recommended Next Steps
 
-1. Add timeline mock outputs for `estimateTempo`, `detectPhrases`,
-   `alignPhrase`, and `stitchPhrases`.
+1. Add timeline mock outputs for `detectPhrases`, `alignPhrase`, and
+   `stitchPhrases`.
 2. Add mock GAME, LyricFA, and score export task runners.
 3. Build an end-to-end mock pipeline before integrating GAME, LyricFA, or
    heavy audio dependencies.

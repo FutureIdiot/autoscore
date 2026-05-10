@@ -51,7 +51,7 @@ def _project_screen(controller: AutoscoreController, project_id: str) -> None:
         _clear_screen()
         _print_project_status(status)
         print()
-        choice = _prompt("s=run separateAudio, run <task>, b=back, r=refresh, q=quit: ").strip()
+        choice = _prompt("s=run separateAudio, t=run estimateTempo, run <task>, b=back, r=refresh, q=quit: ").strip()
         normalized = choice.lower()
         if normalized == "b":
             return
@@ -61,6 +61,9 @@ def _project_screen(controller: AutoscoreController, project_id: str) -> None:
             continue
         if normalized == "s":
             _run_step(controller, project_id, "separateAudio")
+            continue
+        if normalized == "t":
+            _run_step(controller, project_id, "estimateTempo")
             continue
         if normalized.startswith("run "):
             task_type = choice[4:].strip()

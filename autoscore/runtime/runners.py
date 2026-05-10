@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from autoscore.core.artifacts import ArtifactRef, LocalArtifactStore
 from autoscore.packages.audio.separator import run_mock_separator
+from autoscore.packages.timeline.tempo import run_mock_tempo_estimator
 from autoscore.runtime.tasks import ExecutionInfo, TaskEnvelope, TaskRequirements, TaskResult
 
 TaskRunner = Callable[[TaskEnvelope, LocalArtifactStore], TaskResult]
@@ -51,19 +52,29 @@ def input_artifact_ids_for_task(task_type: str) -> list[str]:
 def _requirements_for_task(task_type: str) -> TaskRequirements:
     if task_type == "separateAudio":
         return TaskRequirements(node_types=["separator-node"], required_backends=["mock"], artifact_kinds=["audio/wav"])
+    if task_type == "estimateTempo":
+        return TaskRequirements(
+            node_types=["tempo-node"],
+            required_backends=["mock"],
+            artifact_kinds=["audio/wav", "application/json"],
+        )
     return TaskRequirements(required_backends=["mock"])
 
 
 def _node_id_for_task(task_type: str) -> str:
     if task_type == "separateAudio":
         return "audio-local"
+    if task_type == "estimateTempo":
+        return "timeline-local"
     return "local"
 
 
 _INPUT_ARTIFACT_IDS = {
     "separateAudio": ("artifact_original_audio",),
+    "estimateTempo": ("artifact_original_audio", "artifact_manual_metadata_json"),
 }
 
 _LOCAL_RUNNERS: dict[str, TaskRunner] = {
     "separateAudio": run_mock_separator,
+    "estimateTempo": run_mock_tempo_estimator,
 }

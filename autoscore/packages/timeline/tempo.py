@@ -7,8 +7,13 @@ boundary later.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
+
+from autoscore.core.artifacts import LocalArtifactStore
+from autoscore.core.problems import ProblemRecord
+from autoscore.runtime.tasks import ExecutionInfo, TaskEnvelope, TaskResult
 
 DEFAULT_TIMEBASE = 480
 
@@ -111,3 +116,62 @@ def tick_to_ms(tick: int | float, *, bpm: float, grid_offset_ms: float = 0, time
     if timebase <= 0:
         raise ValueError("timebase must be positive")
     return tick / timebase / bpm * 60000 + grid_offset_ms
+
+
+def run_mock_tempo_estimator(envelope: TaskEnvelope, store: LocalArtifactStore) -> TaskResult:
+    """Write a deterministic tempo timeline artifact from manual metadata."""
+
+    metadata_artifact = _find_input_artifact(envelope, "artifact_manual_metadata_json")
+    metadata_path = store.materialize(metadata_artifact)
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    warnings = []
+    global_tempo = metadata.get("globalTempo")
+    if global_tempo is None:
+        global_tempo = 120
+        source = "mock-default"
+        warnings.append(
+            ProblemRecord.warning(
+                "tempo.mock_default",
+                "manual tempo was not provided; mock tempo defaulted to 120 BPM",
+            )
+        )
+    else:
+        source = "manual"
+
+    tempo = TempoTimeline(
+        global_tempo=float(global_tempo),
+        source=source,
+        candidates=[
+            TempoCandidate(
+                bpm=float(global_tempo),
+                source=source,
+                confidence=1.0 if source == "manual" else 0.25,
+            )
+        ],
+        warnings=[warning.message for warning in warnings],
+    )
+    target = store.resolve_relative_path("timeline/tempo.json")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(tempo.to_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    artifact = store.create_ref(
+        artifact_id="artifact_tempo_timeline_json",
+        kind="application/json",
+        relative_path="timeline/tempo.json",
+        metadata={"mock": True, "source": source},
+    )
+    return TaskResult(
+        task_id=envelope.task_id,
+        project_id=envelope.project_id,
+        task_type=envelope.task_type,
+        status="succeeded",
+        output_artifacts=[artifact],
+        warnings=warnings,
+        execution=ExecutionInfo(mode="local", transport="in_process", node_id="timeline-local"),
+    )
+
+
+def _find_input_artifact(envelope: TaskEnvelope, artifact_id: str):
+    for artifact in envelope.input_artifacts:
+        if artifact.artifact_id == artifact_id:
+            return artifact
+    raise KeyError(f"missing required input artifact: {artifact_id}")

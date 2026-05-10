@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -166,6 +167,41 @@ class AutoscoreControllerTests(unittest.TestCase):
 
             with self.assertRaises(NotImplementedError):
                 controller.run_step("demo", "missingTask")
+
+    def test_run_step_estimate_tempo_writes_manual_tempo_timeline(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            controller = AutoscoreController(workspace)
+            controller.create_project(project_id="demo", audio_path=source_audio, lyrics_text="hello", global_tempo=132)
+
+            result = controller.run_step("demo", "estimateTempo")
+            manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
+            tempo_data = json.loads((workspace / "demo" / "timeline" / "tempo.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(manifest.steps["estimateTempo"].status, "succeeded")
+        self.assertEqual(manifest.steps["estimateTempo"].output_artifact_ids, ["artifact_tempo_timeline_json"])
+        self.assertIn("artifact_tempo_timeline_json", manifest.artifacts)
+        self.assertEqual(tempo_data["globalTempo"], 132)
+        self.assertEqual(tempo_data["source"], "manual")
+
+    def test_run_step_estimate_tempo_defaults_when_manual_tempo_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            controller = AutoscoreController(workspace)
+            controller.create_project(project_id="demo", audio_path=source_audio, lyrics_text="hello")
+
+            controller.run_step("demo", "estimateTempo")
+            manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
+            tempo_data = json.loads((workspace / "demo" / "timeline" / "tempo.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(tempo_data["globalTempo"], 120)
+        self.assertEqual(tempo_data["source"], "mock-default")
+        self.assertTrue(any("mock tempo defaulted" in warning for warning in manifest.steps["estimateTempo"].warnings))
 
     def test_cli_create_project(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

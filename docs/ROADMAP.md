@@ -16,7 +16,7 @@ older private implementation lists that may exist locally under
 - Dependency-free development CLI/TUI shell.
 - Local artifact registry and materialization.
 - CLI project creation and TUI import-directory project creation.
-- Mock `separateAudio` runner wired through controller/TUI step execution.
+- Mock `separateAudio` and `estimateTempo` runners wired through controller/TUI step execution.
 - Timeline foundation models and tests.
 
 ## Next Steps
@@ -26,7 +26,6 @@ older private implementation lists that may exist locally under
    Add local/mock runners for the remaining major task types:
 
    ```text
-   estimateTempo
    detectPhrases
    runGame
    runLyricFA
