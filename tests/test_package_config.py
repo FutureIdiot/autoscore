@@ -11,6 +11,7 @@ class PackageConfigTests(unittest.TestCase):
         config = load_app_config("missing-autoscore-local.json")
 
         self.assertIsInstance(config, AppConfig)
+        self.assertEqual(config.workspace_root, "workspaces")
         self.assertIsNone(config.import_dir)
 
     def test_loads_json_app_config(self) -> None:
@@ -20,6 +21,7 @@ class PackageConfigTests(unittest.TestCase):
                 json.dumps(
                     {
                         "importDir": "D:/autoscore-imports",
+                        "workspaceRoot": "D:/autoscore-workspaces",
                         "defaultTempo": 120,
                         "audioExtensions": [".wav"],
                     }
@@ -29,6 +31,7 @@ class PackageConfigTests(unittest.TestCase):
 
             config = load_app_config(path)
 
+        self.assertEqual(config.workspace_root, "D:/autoscore-workspaces")
         self.assertEqual(config.import_dir, "D:/autoscore-imports")
         self.assertEqual(config.default_tempo, 120)
         self.assertEqual(config.audio_extensions, [".wav"])

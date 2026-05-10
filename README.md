@@ -64,9 +64,12 @@ uv run autoscore tui
 ```
 
 For TUI batch project creation, copy `config/autoscore.local.example.json` to
-`config/autoscore.local.json` and set `importDir` to the directory where you drop
-audio files and optional same-name `.txt` lyric files. The local config file is
-ignored by Git. In the TUI, press `c` to create projects from that directory.
+`config/autoscore.local.json`, set `workspaceRoot` to the project workspace
+directory, and set `importDir` to the directory where you drop audio files and
+optional same-name `.txt` lyric files. Successfully imported files are removed
+from `importDir`. The local config file is ignored by Git. In the TUI, press
+`c` to create projects from that directory, or `c!` to overwrite an existing
+processed project.
 
 ## Current Runtime Model
 

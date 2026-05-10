@@ -6,7 +6,12 @@ from autoscore.cli.main import main
 from autoscore.core.artifacts import ArtifactRef
 from autoscore.core.projects import ProjectManifest
 from autoscore.config import AppConfig
-from autoscore.runtime import AutoscoreController, NodeRegistration, project_id_from_name
+from autoscore.runtime import AutoscoreController, NodeRegistration, ProjectAlreadyProcessedError, project_id_from_name
+
+
+def _write_audio(path: Path) -> Path:
+    path.write_bytes(b"audio")
+    return path
 
 
 class AutoscoreControllerTests(unittest.TestCase):
@@ -107,6 +112,19 @@ class AutoscoreControllerTests(unittest.TestCase):
         self.assertEqual(copied_audio, b"audio")
         self.assertEqual(copied_lyrics, "hello world")
 
+    def test_uses_configured_workspace_when_not_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "configured-workspaces"
+            controller = AutoscoreController(app_config=AppConfig(workspace_root=str(workspace)))
+
+            controller.create_project(
+                project_id="demo",
+                audio_path=_write_audio(Path(temp_dir) / "song.wav"),
+                lyrics_text="hello",
+            )
+
+            self.assertTrue((workspace / "demo" / "manifest.json").exists())
+
     def test_create_project_rejects_existing_manifest_without_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir) / "workspaces"
@@ -161,11 +179,14 @@ class AutoscoreControllerTests(unittest.TestCase):
             results = controller.create_projects_from_import_dir()
             status = controller.get_project_status("Song_A")
 
-        self.assertEqual([result.status for result in results], ["created", "created"])
-        self.assertEqual(status.summary.project_id, "Song_A")
-        self.assertEqual(status.summary.artifact_count, 3)
+            self.assertEqual([result.status for result in results], ["created", "created"])
+            self.assertEqual(status.summary.project_id, "Song_A")
+            self.assertEqual(status.summary.artifact_count, 3)
+            self.assertFalse((import_dir / "Song A.wav").exists())
+            self.assertFalse((import_dir / "Song A.txt").exists())
+            self.assertFalse((import_dir / "Song B.flac").exists())
 
-    def test_create_projects_from_import_dir_skips_existing_project(self) -> None:
+    def test_create_projects_from_import_dir_rejects_already_processed_project(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             import_dir = root / "imports"
@@ -177,10 +198,30 @@ class AutoscoreControllerTests(unittest.TestCase):
                 app_config=AppConfig(import_dir=str(import_dir)),
             )
             controller.create_projects_from_import_dir()
+            audio.write_bytes(b"audio")
 
-            results = controller.create_projects_from_import_dir()
+            with self.assertRaises(ProjectAlreadyProcessedError):
+                controller.create_projects_from_import_dir()
 
-        self.assertEqual(results[0].status, "skipped")
+    def test_create_projects_from_import_dir_force_overwrites_existing_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            import_dir = root / "imports"
+            import_dir.mkdir()
+            audio = import_dir / "song.wav"
+            audio.write_bytes(b"audio")
+            controller = AutoscoreController(
+                root / "workspaces",
+                app_config=AppConfig(import_dir=str(import_dir)),
+            )
+            controller.create_projects_from_import_dir()
+            audio.write_bytes(b"new-audio")
+
+            results = controller.create_projects_from_import_dir(overwrite=True)
+            copied_audio = (root / "workspaces" / "song" / "input" / "original_audio.wav").read_bytes()
+
+        self.assertEqual(results[0].status, "created")
+        self.assertEqual(copied_audio, b"new-audio")
 
     def test_project_id_from_name_sanitizes_file_stem(self) -> None:
         self.assertEqual(project_id_from_name("Song A 01"), "Song_A_01")

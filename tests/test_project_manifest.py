@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -53,6 +54,7 @@ class ProjectManifestTests(unittest.TestCase):
             loaded = ProjectManifest.load(path)
 
         self.assertEqual(loaded.project_id, manifest.project_id)
+        self.assertEqual(loaded.project_dir, str(path.parent))
         self.assertEqual(loaded.metadata, {"title": "demo"})
         self.assertIn("artifact_vocals_wav", loaded.artifacts)
         self.assertEqual(loaded.steps["separateAudio"].status, "ready")
@@ -95,6 +97,21 @@ class ProjectManifestTests(unittest.TestCase):
 
         self.assertIn("existing warning", manifest.warnings)
         self.assertTrue(any("no automatic migration" in warning for warning in manifest.warnings))
+
+    def test_load_uses_manifest_file_location_for_project_dir(self) -> None:
+        manifest_data = {
+            "schemaVersion": 1,
+            "projectId": "project_001",
+            "projectDir": "/old/location/project_001",
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "project_001" / "manifest.json"
+            path.parent.mkdir()
+            path.write_text(json.dumps(manifest_data), encoding="utf-8")
+            loaded = ProjectManifest.load(path)
+
+        self.assertEqual(loaded.project_dir, str(path.parent))
 
 
 if __name__ == "__main__":

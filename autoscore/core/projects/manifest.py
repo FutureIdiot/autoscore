@@ -148,7 +148,7 @@ class ProjectManifest:
         return step
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ProjectManifest":
+    def from_dict(cls, data: dict[str, Any], *, project_dir: str | Path | None = None) -> "ProjectManifest":
         migrated_data, _migration_warnings = migrate_manifest_dict(data)
         artifacts = {
             artifact_id: ArtifactRef.from_dict(artifact_data)
@@ -158,9 +158,10 @@ class ProjectManifest:
             task_type: ManifestStep.from_dict(step_data)
             for task_type, step_data in migrated_data.get("steps", {}).items()
         }
+        resolved_project_dir = str(project_dir) if project_dir is not None else migrated_data["projectDir"]
         return cls(
             project_id=migrated_data["projectId"],
-            project_dir=migrated_data["projectDir"],
+            project_dir=resolved_project_dir,
             schema_version=migrated_data.get("schemaVersion", SCHEMA_VERSION),
             created_at=migrated_data.get("createdAt", utc_now_iso()),
             updated_at=migrated_data.get("updatedAt", utc_now_iso()),
@@ -193,8 +194,9 @@ class ProjectManifest:
 
     @classmethod
     def load(cls, path: str | Path) -> "ProjectManifest":
-        with Path(path).open("r", encoding="utf-8") as handle:
-            return cls.from_dict(json.load(handle))
+        manifest_path = Path(path)
+        with manifest_path.open("r", encoding="utf-8") as handle:
+            return cls.from_dict(json.load(handle), project_dir=manifest_path.parent)
 
     def save(self, path: str | Path) -> None:
         target = Path(path)

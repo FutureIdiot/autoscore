@@ -11,7 +11,7 @@ from autoscore.runtime import AutoscoreController
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autoscore")
-    parser.add_argument("--workspace", default="workspaces", help="Workspace root directory.")
+    parser.add_argument("--workspace", default=None, help="Workspace root directory. Overrides config workspaceRoot.")
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("projects", help="List projects in the workspace.")
@@ -35,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    controller = AutoscoreController(Path(args.workspace))
+    controller = AutoscoreController(Path(args.workspace) if args.workspace is not None else None)
 
     if args.command == "projects":
         for project in controller.list_projects():

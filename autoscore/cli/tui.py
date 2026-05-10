@@ -18,11 +18,11 @@ def run_tui(controller: AutoscoreController) -> None:
         if not projects:
             print("No projects found under workspace.")
             print()
-            choice = _prompt("c=create from import dir, q=quit, Enter=refresh: ").lower()
+            choice = _prompt("c=create from import dir, c!=force overwrite, q=quit, Enter=refresh: ").lower()
             if choice == "q":
                 return
-            if choice == "c":
-                _create_from_import_dir(controller)
+            if choice in {"c", "c!"}:
+                _create_from_import_dir(controller, overwrite=choice.endswith("!"))
             continue
 
         for index, project in enumerate(projects, start=1):
@@ -32,11 +32,11 @@ def run_tui(controller: AutoscoreController) -> None:
                 f"warnings={project.warning_count} errors={project.error_count}"
             )
         print()
-        choice = _prompt("Select project number, c=create from import dir, r=refresh, q=quit: ").strip().lower()
+        choice = _prompt("Select project number, c=create from import dir, c!=force overwrite, r=refresh, q=quit: ").strip().lower()
         if choice == "q":
             return
-        if choice == "c":
-            _create_from_import_dir(controller)
+        if choice in {"c", "c!"}:
+            _create_from_import_dir(controller, overwrite=choice.endswith("!"))
             continue
         if choice in {"", "r"}:
             continue
@@ -58,15 +58,16 @@ def _project_screen(controller: AutoscoreController, project_id: str) -> None:
             raise SystemExit(0)
 
 
-def _create_from_import_dir(controller: AutoscoreController) -> None:
+def _create_from_import_dir(controller: AutoscoreController, *, overwrite: bool = False) -> None:
     _clear_screen()
     print("Create Projects From Import Directory")
     print("-------------------------------------")
     print(f"Configured import dir: {controller.app_config.import_dir or '(not configured)'}")
     print(f"Default tempo: {controller.app_config.default_tempo}")
+    print(f"Overwrite existing projects: {overwrite}")
     print()
     try:
-        results = controller.create_projects_from_import_dir()
+        results = controller.create_projects_from_import_dir(overwrite=overwrite)
     except Exception as exc:
         print(f"Failed: {exc}")
         _prompt("Press Enter to continue: ")

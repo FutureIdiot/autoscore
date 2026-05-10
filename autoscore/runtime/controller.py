@@ -62,18 +62,22 @@ class ProjectCreateResult:
     message: str = ""
 
 
+class ProjectAlreadyProcessedError(FileExistsError):
+    """Raised when an import candidate maps to an existing project manifest."""
+
+
 class AutoscoreController:
     """Stable control surface for UI layers."""
 
     def __init__(
         self,
-        workspace_root: str | Path = "workspaces",
+        workspace_root: str | Path | None = None,
         nodes: list[NodeRegistration] | None = None,
         app_config: AppConfig | None = None,
     ) -> None:
-        self.workspace_root = Path(workspace_root)
         self._nodes = nodes if nodes is not None else default_local_nodes()
         self.app_config = app_config if app_config is not None else load_app_config()
+        self.workspace_root = Path(workspace_root if workspace_root is not None else self.app_config.workspace_root)
 
     def list_projects(self) -> list[ProjectSummary]:
         manifests = sorted(self.workspace_root.glob("*/manifest.json"))
@@ -150,6 +154,7 @@ class AutoscoreController:
         import_dir: str | Path | None = None,
         default_tempo: float | None = None,
         overwrite: bool = False,
+        fail_on_processed: bool = True,
     ) -> list[ProjectCreateResult]:
         """Create projects for audio files in the configured import directory."""
 
@@ -168,6 +173,20 @@ class AutoscoreController:
         for audio_file in audio_files:
             project_id = project_id_from_name(audio_file.stem)
             lyrics_path = audio_file.with_suffix(".txt")
+            manifest_path = self._manifest_path(project_id)
+            if manifest_path.exists() and not overwrite:
+                message = f"project {project_id!r} has already been processed: {manifest_path}"
+                if fail_on_processed:
+                    raise ProjectAlreadyProcessedError(message)
+                results.append(
+                    ProjectCreateResult(
+                        project_id=project_id,
+                        audio_path=str(audio_file),
+                        status="failed",
+                        message=message,
+                    )
+                )
+                continue
             try:
                 self.create_project(
                     project_id=project_id,
@@ -196,6 +215,9 @@ class AutoscoreController:
                     )
                 )
             else:
+                audio_file.unlink()
+                if lyrics_path.exists():
+                    lyrics_path.unlink()
                 results.append(
                     ProjectCreateResult(
                         project_id=project_id,

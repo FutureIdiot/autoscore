@@ -15,6 +15,7 @@ from autoscore.constants import SCHEMA_VERSION
 class AppConfig:
     """Local application configuration for development control surfaces."""
 
+    workspace_root: str = "workspaces"
     import_dir: str | None = None
     default_tempo: float | None = None
     audio_extensions: list[str] = field(default_factory=lambda: [".wav", ".flac", ".mp3", ".m4a"])
@@ -22,6 +23,7 @@ class AppConfig:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AppConfig":
         return cls(
+            workspace_root=data.get("workspaceRoot", "workspaces"),
             import_dir=data.get("importDir"),
             default_tempo=data.get("defaultTempo"),
             audio_extensions=[str(item).lower() for item in data.get("audioExtensions", [".wav", ".flac", ".mp3", ".m4a"])],
@@ -29,6 +31,7 @@ class AppConfig:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "workspaceRoot": self.workspace_root,
             "importDir": self.import_dir,
             "defaultTempo": self.default_tempo,
             "audioExtensions": self.audio_extensions,

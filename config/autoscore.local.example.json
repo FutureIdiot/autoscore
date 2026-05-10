@@ -1,4 +1,5 @@
 {
+  "workspaceRoot": "workspaces",
   "importDir": "D:/autoscore-imports",
   "defaultTempo": null,
   "audioExtensions": [".wav", ".flac", ".mp3", ".m4a"]

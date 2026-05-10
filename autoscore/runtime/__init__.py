@@ -2,6 +2,7 @@
 
 from autoscore.runtime.controller import (
     AutoscoreController,
+    ProjectAlreadyProcessedError,
     ProjectCreateResult,
     ProjectStatus,
     ProjectSummary,
@@ -15,6 +16,7 @@ __all__ = [
     "AutoscoreController",
     "ExecutionInfo",
     "NodeRegistration",
+    "ProjectAlreadyProcessedError",
     "ProjectCreateResult",
     "ProjectStatus",
     "ProjectSummary",
