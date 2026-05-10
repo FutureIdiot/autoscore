@@ -443,6 +443,39 @@ class AutoscoreController:
         manifest.save(manifest_path)
         return manifest
 
+    def update_manual_project_info(
+        self,
+        project_id: str,
+        *,
+        global_tempo: float | None,
+        meter: dict[str, object] | None,
+        key: dict[str, object] | None = None,
+    ) -> ProjectManifest:
+        """Update project-level manual parameters and their manifest artifacts."""
+
+        manifest_path = self._manifest_path(project_id)
+        manifest = ProjectManifest.load(manifest_path)
+        store = LocalArtifactStore(manifest.project_dir)
+        current_manual = dict(manifest.metadata.get("manual", {}))
+        resolved_key = key if key is not None else dict(current_manual.get("key", {}))
+        manifest.metadata["manual"] = {
+            "globalTempo": global_tempo,
+            "meter": meter or {},
+            "key": resolved_key or {},
+        }
+        metadata_ref = self._write_manual_metadata_artifact(
+            store,
+            global_tempo=global_tempo,
+            meter=meter,
+            key=resolved_key,
+        )
+        manifest.register_artifact(metadata_ref)
+        if global_tempo is not None:
+            tempo_ref = self._write_provided_tempo_artifact(store, global_tempo=global_tempo)
+            manifest.register_artifact(tempo_ref)
+        manifest.save(manifest_path)
+        return manifest
+
     def load_manifest(self, project_id: str) -> ProjectManifest:
         return ProjectManifest.load(self._manifest_path(project_id))
 

@@ -62,16 +62,21 @@ def _project_screen(controller: AutoscoreController, project_id: str) -> None:
     while True:
         status = controller.get_project_status(project_id)
         _clear_screen()
+        _print_nodes(controller, status=status)
+        print()
         _print_project_status(status)
         print()
         choice = _prompt(
-            "send [task][&][!], [h] help, [b] back, [q] quit: "
+            "send [#|task][&][!], [i] info, [h] help, [b] back, [q] quit: "
         ).strip()
         normalized = choice.lower()
         if normalized == "b":
             return
         if normalized == "q":
             raise SystemExit(0)
+        if normalized in {"i", "info"}:
+            _project_info_screen(controller, project_id)
+            continue
         if normalized == "h":
             _print_help()
             continue
@@ -113,7 +118,10 @@ def _run_step(controller: AutoscoreController, project_id: str, task_type: str) 
 
 def _send_to_nodes(controller: AutoscoreController, project_id: str, command: str, *, pause: bool = True) -> None:
     try:
-        task_type, continue_pipeline, force = _parse_send_command(command)
+        task_type, continue_pipeline, force = _parse_send_command(
+            command,
+            status=controller.get_project_status(project_id),
+        )
         _prepare_task_context(controller, project_id, task_type)
         results = controller.send_to_task(
             project_id,
@@ -145,7 +153,7 @@ def _prepare_task_context(controller: AutoscoreController, project_id: str, task
     controller.provide_tempo_timeline(project_id, global_tempo=tempo)
 
 
-def _parse_send_command(command: str) -> tuple[str | None, bool, bool]:
+def _parse_send_command(command: str, *, status: ProjectStatus | None = None) -> tuple[str | None, bool, bool]:
     payload = command.strip()[len("send") :].strip()
     continue_pipeline = False
     force = False
@@ -156,10 +164,58 @@ def _parse_send_command(command: str) -> tuple[str | None, bool, bool]:
             force = True
         if suffix == "&":
             continue_pipeline = True
-    task_type = payload or None
+    task_type = _task_type_from_send_payload(payload, status=status) if payload else None
     if task_type is None:
         continue_pipeline = True
     return task_type, continue_pipeline, force
+
+
+def _task_type_from_send_payload(payload: str, *, status: ProjectStatus | None) -> str:
+    normalized = payload.strip()
+    if normalized.startswith("#"):
+        normalized = normalized[1:].strip()
+    if normalized.isdigit():
+        if status is None:
+            raise ValueError("send target numbers require a project status")
+        index = int(normalized)
+        if not 1 <= index <= len(status.task_readiness):
+            raise ValueError(f"send target #{index} is out of range")
+        return status.task_readiness[index - 1].task_type
+    if status is not None:
+        for task in status.task_readiness:
+            if normalized.lower() in {task.task_type.lower(), task.node_id.lower()}:
+                return task.task_type
+    return normalized
+
+
+def _project_info_screen(controller: AutoscoreController, project_id: str) -> None:
+    _clear_screen()
+    print("Project Info")
+    print("------------")
+    manifest = controller.load_manifest(project_id)
+    manual = dict(manifest.metadata.get("manual", {}))
+    tempo = manual.get("globalTempo")
+    meter = manual.get("meter") if isinstance(manual.get("meter"), dict) else {}
+    print(f"Project: {manifest.project_id}")
+    print(f"Directory: {manifest.project_dir}")
+    print(f"Tempo BPM: {_format_optional_value(tempo)}")
+    print(f"Meter: {_format_meter(meter)}")
+    print()
+    choice = _prompt("Edit manual parameters? [y/N]: ").strip().lower()
+    if choice not in {"y", "yes"}:
+        return
+    new_tempo = _prompt_optional_float(
+        f"Tempo BPM (blank=keep {_format_optional_value(tempo)}): ",
+        field_name="tempo",
+    )
+    if new_tempo is None:
+        new_tempo = float(tempo) if isinstance(tempo, int | float) else None
+    new_meter = _prompt_meter(f"Meter (blank=keep {_format_meter(meter)}): ")
+    if new_meter is None:
+        new_meter = meter if meter else None
+    controller.update_manual_project_info(project_id, global_tempo=new_tempo, meter=new_meter)
+    print("Updated project info.")
+    _prompt("Press Enter to continue: ")
 
 
 def _create_project(controller: AutoscoreController, *, overwrite: bool = False) -> None:
@@ -247,11 +303,12 @@ def _print_help() -> None:
     print("--------")
     print("create     Create a project from an inbox/import-dir audio file.")
     print("create!    Create and overwrite an existing project.")
+    print("info       View or edit current project tempo and meter.")
     print("send       In a project, start at the first ready pipeline node and continue.")
-    print("send TASK  Send current artifacts to one task only, e.g. send detectPhrases.")
-    print("send TASK& Send to TASK, then continue through downstream ready nodes.")
-    print("send TASK! Force rerun TASK.")
-    print("send TASK&! Force rerun from TASK, then continue downstream.")
+    print("send #     Send to a numbered node task, e.g. send 2.")
+    print("send TASK  Send to a named task, e.g. send detectPhrases.")
+    print("send #&    Send to #, then continue through downstream ready nodes.")
+    print("send #!    Force rerun #.")
     print("r          Refresh.")
     print("b          Go back from a project.")
     print("q          Quit.")
@@ -355,17 +412,25 @@ def _provided_audio_inbox(controller: AutoscoreController) -> Path:
     return Path(controller.app_config.import_dir or "inbox")
 
 
-def _print_nodes(controller: AutoscoreController) -> None:
+def _print_nodes(controller: AutoscoreController, *, status: ProjectStatus | None = None) -> None:
     print("Deployed Nodes")
     print("--------------")
+    if status is not None:
+        if not status.task_readiness:
+            print("(no runnable node tasks)")
+            return
+        for index, task in enumerate(status.task_readiness, start=1):
+            marker = "ready" if task.ready else "pending"
+            print(f"{index}. {task.node_id:18} <- {task.task_type:16} {marker:7} step={task.status}")
+        return
     nodes = controller.list_nodes()
     if not nodes:
         print("(no registered nodes)")
         return
-    for node in nodes:
+    for index, node in enumerate(nodes, start=1):
         capabilities = ", ".join(node.capabilities)
         tasks = ", ".join(node.supported_tasks)
-        print(f"{node.node_id} [{node.status}]")
+        print(f"{index}. {node.node_id} [{node.status}]")
         print(f"  package: {node.package_id}")
         print(f"  capabilities: {capabilities}")
         print(f"  tasks: {tasks}")
@@ -404,14 +469,20 @@ def _print_project_status(status: ProjectStatus) -> None:
             print(f"WARN: {warning}")
         for error in status.errors:
             print(f"ERR: {error}")
-    print()
-    print("Ready Nodes")
-    print("-----------")
-    ready_tasks = [task for task in status.task_readiness if task.ready and task.status != "succeeded"]
-    if not ready_tasks:
-        print("(none)")
-    for task in ready_tasks:
-        print(f"{task.node_id:18} <- {task.task_type}")
+
+
+def _format_optional_value(value: object) -> str:
+    return "unset" if value is None else str(value)
+
+
+def _format_meter(value: object) -> str:
+    if not isinstance(value, dict):
+        return "unset"
+    numerator = value.get("numerator")
+    denominator = value.get("denominator")
+    if numerator is None or denominator is None:
+        return "unset"
+    return f"{numerator}/{denominator}"
 
 
 def _prompt(text: str) -> str:

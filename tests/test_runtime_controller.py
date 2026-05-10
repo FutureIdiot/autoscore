@@ -632,6 +632,28 @@ class AutoscoreControllerTests(unittest.TestCase):
         self.assertEqual([item.task_type for item in result], ["detectPhrases"])
         self.assertEqual(phrase_data["barDurationMs"], 1818.1818181818182)
 
+    def test_update_manual_project_info_writes_metadata_and_tempo_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            controller = AutoscoreController(workspace)
+            controller.create_empty_project(project_id="demo")
+
+            controller.update_manual_project_info(
+                "demo",
+                global_tempo=96,
+                meter={"numerator": 3, "denominator": 4},
+            )
+            manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
+            metadata = json.loads((workspace / "demo" / "input" / "manual_metadata.json").read_text(encoding="utf-8"))
+            tempo = json.loads((workspace / "demo" / "timeline" / "tempo.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(manifest.metadata["manual"]["globalTempo"], 96)
+        self.assertEqual(manifest.metadata["manual"]["meter"], {"numerator": 3, "denominator": 4})
+        self.assertIn("artifact_manual_metadata_json", manifest.artifacts)
+        self.assertIn("artifact_tempo_timeline_json", manifest.artifacts)
+        self.assertEqual(metadata["meter"], {"numerator": 3, "denominator": 4})
+        self.assertEqual(tempo["globalTempo"], 96)
+
     def test_cli_create_project(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir) / "workspaces"
