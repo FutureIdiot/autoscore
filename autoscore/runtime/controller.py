@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,6 +33,11 @@ _PIPELINE_TASK_ORDER = (
     "stitchPhrases",
     "buildScoreJson",
 )
+_PENDING_INPUTS_METADATA_KEY = "pendingInputs"
+_AUDIO_ARTIFACT_BINDINGS = {
+    "artifact_original_audio": ("input/original_audio.wav", "originalAudio"),
+    "artifact_vocals_wav": ("audio/vocals.wav", "vocals"),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +145,51 @@ class AutoscoreController:
         project_dir.mkdir(parents=True, exist_ok=True)
         manifest = ProjectManifest(project_id=project_id, project_dir=str(project_dir))
         manifest.set_step_status("createProject", "succeeded", output_artifact_ids=[])
+        manifest.save(manifest_path)
+        return manifest
+
+    def create_project_from_pending_inputs(
+        self,
+        *,
+        project_id: str,
+        input_paths: list[str | Path],
+        overwrite: bool = False,
+    ) -> ProjectManifest:
+        """Create a project and copy discovered files as unbound pending inputs."""
+
+        manifest = self.create_empty_project(project_id=project_id, overwrite=overwrite)
+        return self.add_pending_inputs(project_id, input_paths=input_paths)
+
+    def add_pending_inputs(
+        self,
+        project_id: str,
+        *,
+        input_paths: list[str | Path],
+    ) -> ProjectManifest:
+        """Copy files into the project inbox without assigning artifact roles yet."""
+
+        manifest_path = self._manifest_path(project_id)
+        manifest = ProjectManifest.load(manifest_path)
+        pending_inputs = _pending_inputs(manifest)
+        project_dir = Path(manifest.project_dir)
+        store = LocalArtifactStore(project_dir)
+        for input_path in input_paths:
+            source = Path(input_path)
+            if not source.is_file():
+                raise FileNotFoundError(source)
+            relative_path = _unique_project_inbox_path(store, source.name)
+            target = store.resolve_relative_path(relative_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            pending_inputs.append(
+                {
+                    "relativePath": relative_path,
+                    "sourcePath": str(source),
+                    "kind": _kind_for_audio_path(source),
+                    "status": "pending",
+                }
+            )
+        manifest.metadata[_PENDING_INPUTS_METADATA_KEY] = pending_inputs
         manifest.save(manifest_path)
         return manifest
 
@@ -468,6 +519,7 @@ class AutoscoreController:
         store = LocalArtifactStore(manifest.project_dir)
         required_input_artifact_ids = required_input_artifact_ids_for_task(task_type)
         optional_input_artifact_ids = optional_input_artifact_ids_for_task(task_type)
+        self._bind_pending_inputs_for_missing_required_artifacts(manifest, store, required_input_artifact_ids)
         missing_required_artifact_ids = [
             artifact_id for artifact_id in required_input_artifact_ids if artifact_id not in manifest.artifacts
         ]
@@ -513,10 +565,61 @@ class AutoscoreController:
         manifest.save(manifest_path)
         return result
 
+    def _bind_pending_inputs_for_missing_required_artifacts(
+        self,
+        manifest: ProjectManifest,
+        store: LocalArtifactStore,
+        required_input_artifact_ids: list[str],
+    ) -> None:
+        pending_inputs = _available_pending_audio_inputs(
+            manifest,
+            self.app_config.audio_extensions,
+            import_dir=self._global_input_dir(),
+        )
+        if not pending_inputs:
+            return
+        changed = False
+        bound_inputs: list[tuple[dict[str, object], str]] = []
+        for artifact_id in required_input_artifact_ids:
+            if artifact_id in manifest.artifacts or artifact_id not in _AUDIO_ARTIFACT_BINDINGS:
+                continue
+            pending_input = pending_inputs.pop(0)
+            source_path = _pending_input_source_path(store, pending_input)
+            relative_path, provided_as = _AUDIO_ARTIFACT_BINDINGS[artifact_id]
+            artifact = store.import_file(
+                source_path,
+                kind=str(pending_input.get("kind") or "audio/wav"),
+                relative_path=relative_path,
+                artifact_id=artifact_id,
+                metadata={
+                    "provided": True,
+                    "providedAs": provided_as,
+                    "boundFromPendingInput": _pending_input_display_path(pending_input),
+                    "sourcePath": str(pending_input.get("sourcePath", "")),
+                },
+            )
+            manifest.register_artifact(artifact)
+            pending_input["status"] = "bound"
+            pending_input["artifactId"] = artifact_id
+            bound_inputs.append((pending_input, artifact_id))
+            changed = True
+        if changed:
+            manifest.metadata[_PENDING_INPUTS_METADATA_KEY] = _mark_pending_inputs_bound(manifest, bound_inputs)
+
     def _manifest_path(self, project_id: str) -> Path:
         if not project_id:
             raise ValueError("project_id is required")
         return self.workspace_root / project_id / "manifest.json"
+
+    def _global_input_dir(self) -> str | None:
+        if self.app_config.import_dir:
+            return self.app_config.import_dir
+        try:
+            if self.workspace_root.resolve() == Path("workspaces").resolve():
+                return "inbox"
+        except FileNotFoundError:
+            return None
+        return None
 
     @staticmethod
     def _validate_project_id(project_id: str) -> None:
@@ -713,3 +816,165 @@ def _node_id_from_execution_or_task(execution: dict[str, object], task_type: str
     if task_type == "buildScoreJson":
         return "score-export-local"
     return "local"
+
+
+def _pending_inputs(manifest: ProjectManifest) -> list[dict[str, object]]:
+    pending = manifest.metadata.get(_PENDING_INPUTS_METADATA_KEY, [])
+    if not isinstance(pending, list):
+        return []
+    return [dict(item) for item in pending if isinstance(item, dict)]
+
+
+def _available_pending_audio_inputs(
+    manifest: ProjectManifest,
+    audio_extensions: list[str],
+    *,
+    import_dir: str | None,
+) -> list[dict[str, object]]:
+    project_dir = Path(manifest.project_dir)
+    artifact_relative_paths = {
+        artifact.relative_path
+        for artifact in manifest.artifacts.values()
+        if artifact.relative_path
+    }
+    audio_suffixes = {extension.lower() for extension in audio_extensions}
+    pending_inputs = [
+        item
+        for item in _pending_inputs(manifest)
+        if item.get("status", "pending") == "pending"
+        and isinstance(item.get("relativePath"), str)
+        and item.get("relativePath") not in artifact_relative_paths
+    ]
+    seen = {str(item["relativePath"]) for item in pending_inputs}
+    inbox_dir = project_dir / "inbox"
+    if inbox_dir.is_dir():
+        for path in sorted(inbox_dir.iterdir()):
+            relative_path = f"inbox/{path.name}"
+            if (
+                path.is_file()
+                and path.suffix.lower() in audio_suffixes
+                and relative_path not in artifact_relative_paths
+                and relative_path not in seen
+            ):
+                pending_inputs.append(
+                    {
+                        "relativePath": relative_path,
+                        "sourcePath": str(path),
+                        "kind": _kind_for_audio_path(path),
+                        "status": "pending",
+                    }
+                )
+    global_inbox_inputs = _global_inbox_audio_inputs(
+        manifest,
+        audio_suffixes=audio_suffixes,
+        import_dir=import_dir,
+        seen_source_paths={
+            str(item.get("sourcePath"))
+            for item in pending_inputs
+            if item.get("sourcePath")
+        },
+    )
+    pending_inputs.extend(global_inbox_inputs)
+    return pending_inputs
+
+
+def _global_inbox_audio_inputs(
+    manifest: ProjectManifest,
+    *,
+    audio_suffixes: set[str],
+    import_dir: str | None,
+    seen_source_paths: set[str],
+) -> list[dict[str, object]]:
+    if import_dir is None:
+        return []
+    inbox_dir = Path(import_dir)
+    if not inbox_dir.is_dir():
+        return []
+    candidates = [
+        path
+        for path in sorted(inbox_dir.iterdir())
+        if path.is_file()
+        and path.suffix.lower() in audio_suffixes
+        and str(path) not in seen_source_paths
+    ]
+    if not candidates:
+        return []
+    matching_project = [
+        path
+        for path in candidates
+        if project_id_from_name(path.stem).lower() == manifest.project_id.lower()
+    ]
+    selected = matching_project or (candidates if len(candidates) == 1 else [])
+    return [
+        {
+            "relativePath": "",
+            "sourcePath": str(path),
+            "kind": _kind_for_audio_path(path),
+            "status": "pending",
+        }
+        for path in selected
+    ]
+
+
+def _mark_pending_inputs_bound(
+    manifest: ProjectManifest,
+    bound_inputs: list[tuple[dict[str, object], str]],
+) -> list[dict[str, object]]:
+    pending_inputs = _pending_inputs(manifest)
+    by_pending_key = {
+        _pending_input_key(item): item
+        for item in pending_inputs
+    }
+    for bound_input, artifact_id in bound_inputs:
+        key = _pending_input_key(bound_input)
+        target = by_pending_key.get(key)
+        if target is None:
+            target = {
+                "relativePath": str(bound_input.get("relativePath", "")),
+                "sourcePath": str(bound_input.get("sourcePath", "")),
+                "kind": str(bound_input.get("kind") or "audio/wav"),
+            }
+            pending_inputs.append(target)
+            by_pending_key[key] = target
+        target["status"] = "bound"
+        target["artifactId"] = artifact_id
+    return pending_inputs
+
+
+def _pending_input_key(pending_input: dict[str, object]) -> str:
+    relative_path = str(pending_input.get("relativePath", ""))
+    if relative_path:
+        return f"relative:{relative_path}"
+    return f"source:{pending_input.get('sourcePath', '')}"
+
+
+def _pending_input_display_path(pending_input: dict[str, object]) -> str:
+    return str(pending_input.get("relativePath") or pending_input.get("sourcePath") or "")
+
+
+def _pending_input_source_path(store: LocalArtifactStore, pending_input: dict[str, object]) -> Path:
+    relative_path = str(pending_input.get("relativePath", ""))
+    if relative_path:
+        return store.resolve_relative_path(relative_path)
+    source_path = str(pending_input.get("sourcePath", ""))
+    if not source_path:
+        raise FileNotFoundError("pending input has no relativePath or sourcePath")
+    return Path(source_path)
+
+
+def _unique_project_inbox_path(store: LocalArtifactStore, filename: str) -> str:
+    stem = Path(filename).stem or "input"
+    suffix = Path(filename).suffix
+    candidate = f"inbox/{filename}"
+    index = 2
+    while store.resolve_relative_path(candidate).exists():
+        candidate = f"inbox/{stem}-{index}{suffix}"
+        index += 1
+    return candidate
+
+
+def _kind_for_audio_path(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".flac":
+        return "audio/flac"
+    return "audio/wav"

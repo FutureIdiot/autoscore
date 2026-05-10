@@ -114,7 +114,6 @@ def _run_step(controller: AutoscoreController, project_id: str, task_type: str) 
 def _send_to_nodes(controller: AutoscoreController, project_id: str, command: str, *, pause: bool = True) -> None:
     try:
         task_type, continue_pipeline, force = _parse_send_command(command)
-        _ensure_required_inputs(controller, project_id, task_type)
         _prepare_task_context(controller, project_id, task_type)
         results = controller.send_to_task(
             project_id,
@@ -131,31 +130,6 @@ def _send_to_nodes(controller: AutoscoreController, project_id: str, command: st
             print(f"{result.execution.node_id}: {result.task_type} -> {result.status}")
     if pause:
         _prompt("Press Enter to continue: ")
-
-
-def _ensure_required_inputs(controller: AutoscoreController, project_id: str, task_type: str | None) -> None:
-    if task_type is None:
-        return
-    status = controller.get_project_status(project_id)
-    readiness = next((task for task in status.task_readiness if task.task_type == task_type), None)
-    if readiness is None or not readiness.missing_input_artifact_ids:
-        return
-    missing = ", ".join(readiness.missing_input_artifact_ids)
-    suggestion = _suggest_upstream_send(task_type, readiness.missing_input_artifact_ids)
-    message = f"{task_type} is missing required input artifact(s): {missing}"
-    if suggestion:
-        message += f". Try `{suggestion}`."
-    raise ValueError(message)
-
-
-def _suggest_upstream_send(task_type: str, missing_artifact_ids: list[str]) -> str:
-    if task_type == "detectPhrases" and "artifact_vocals_wav" in missing_artifact_ids:
-        return "send separateAudio&"
-    if task_type == "estimateTempo" and "artifact_original_audio" in missing_artifact_ids:
-        return "create"
-    if task_type == "separateAudio" and "artifact_original_audio" in missing_artifact_ids:
-        return "create"
-    return ""
 
 
 def _prepare_task_context(controller: AutoscoreController, project_id: str, task_type: str | None) -> None:
@@ -244,33 +218,18 @@ def _create_project_for_audio_file(
     overwrite: bool,
 ):
     project_id = project_id_from_name(audio_path.stem)
-    if _looks_like_vocals(audio_path):
-        return controller.create_project_from_provided_vocals(
-            project_id=project_id,
-            vocals_path=audio_path,
-            global_tempo=tempo,
-            meter=meter,
-            overwrite=overwrite,
-        )
-    lyrics_path = audio_path.with_suffix(".txt")
-    manifest = controller.create_project(
+    manifest = controller.create_project_from_pending_inputs(
         project_id=project_id,
-        audio_path=audio_path,
-        lyrics_path=lyrics_path if lyrics_path.exists() else None,
-        lyrics_text="" if not lyrics_path.exists() else None,
-        global_tempo=tempo,
-        meter=meter,
+        input_paths=[audio_path],
         overwrite=overwrite,
     )
-    controller.attach_artifact(
-        manifest.project_id,
-        source_path=audio_path,
-        artifact_id="artifact_vocals_wav",
-        kind="audio/wav",
-        relative_path="audio/vocals.wav",
-        metadata={"providedAs": "vocalsCandidate"},
-    )
-    return controller.provide_tempo_timeline(manifest.project_id, global_tempo=tempo)
+    manifest.metadata["manual"] = {
+        "globalTempo": tempo,
+        "meter": meter or {},
+        "key": {},
+    }
+    manifest.save(Path(manifest.project_dir) / "manifest.json")
+    return manifest
 
 
 def _prompt_send_after_create(controller: AutoscoreController, manifests: list[object]) -> None:
@@ -280,11 +239,6 @@ def _prompt_send_after_create(controller: AutoscoreController, manifests: list[o
     send_command = "send" if not command else f"send {command}"
     for manifest in manifests:
         _send_to_nodes(controller, manifest.project_id, send_command, pause=False)
-
-
-def _looks_like_vocals(audio_path: Path) -> bool:
-    normalized = audio_path.stem.lower().replace("-", "_").replace(" ", "_")
-    return "vocal" in normalized or "vocals" in normalized
 
 
 def _print_help() -> None:

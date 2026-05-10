@@ -15,18 +15,51 @@ older private implementation lists that may exist locally under
 - Runtime controller and static local node registry.
 - Dependency-free development CLI/TUI shell.
 - Local artifact registry and materialization.
-- CLI project creation and TUI import-directory project creation.
-- Mock `separateAudio` and `estimateTempo` runners wired through controller/TUI step execution.
+- CLI project creation and TUI create/send project workflow.
+- Artifact-driven dispatch with required and optional task input contracts.
+- Empty project creation, provided artifact attachment, provided vocals, and
+  provided tempo timeline support.
+- Mock `separateAudio`, `estimateTempo`, and `detectPhrases` runners wired
+  through controller/TUI send execution.
 - Timeline foundation models and tests.
+
+## Current Development State
+
+- `create` in the TUI creates project workspaces from `importDir` or `inbox/`,
+  or creates an empty workspace when no files are present.
+- `send` dispatches currently registered artifacts to ready nodes. It can run
+  the ready pipeline, a single task, or a downstream chain with `&`; `!` forces
+  reruns.
+- Readiness only blocks on required artifacts. Optional inputs such as lyrics,
+  manual metadata, or tempo context are allowed to be missing and should produce
+  warnings from the receiving task.
+- `detectPhrases` currently requires only `artifact_vocals_wav`; missing tempo
+  falls back to 120 BPM, missing meter falls back to 4/4, and missing lyrics are
+  reported as warnings.
+- The current `create` implementation still guesses whether inbox audio should
+  be treated as original audio or provided vocals. This is the next design
+  cleanup.
 
 ## Next Steps
 
-1. Expand Mock Task Runners
+1. Pending Input Binding
+
+   Move artifact role assignment out of `create`. `create` should register
+   incoming files as pending project inputs. `send <task>` should bind pending
+   files to the artifacts required by that task:
+
+   ```text
+   send separateAudio    pending audio -> artifact_original_audio
+   send detectPhrases    pending audio -> artifact_vocals_wav
+   ```
+
+   This keeps single-node tests and full-pipeline runs on the same mechanism.
+
+2. Expand Mock Task Runners
 
    Add local/mock runners for the remaining major task types:
 
    ```text
-   detectPhrases
    runGame
    runLyricFA
    alignPhrase
@@ -34,23 +67,23 @@ older private implementation lists that may exist locally under
    buildScoreJson
    ```
 
-2. End-to-End Mock Pipeline
+3. End-to-End Mock Pipeline
 
    Run a full project through mock separator, mock timeline, mock GAME, mock
    LyricFA, alignment, stitching, and placeholder score export.
 
-3. Real Timeline Analysis
+4. Real Timeline Analysis
 
    Add tempo and phrase detection backends. Start with lightweight mocked or
    librosa-based behavior, then evaluate Essentia when needed.
 
-4. External Integrations
+5. External Integrations
 
    Integrate GAME and LyricFA behind their package boundaries. Keep their local
    Python paths and model paths in package config or provenance, not in project
    manifests.
 
-5. Score Export
+6. Score Export
 
    Implement canonical score schema models, validation, bar generation, and
    `score.json` export after the mock pipeline is stable.

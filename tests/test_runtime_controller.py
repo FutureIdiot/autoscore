@@ -140,6 +140,101 @@ class AutoscoreControllerTests(unittest.TestCase):
         self.assertEqual(loaded.steps["createProject"].status, "succeeded")
         self.assertEqual(loaded.steps["createProject"].output_artifact_ids, [])
 
+    def test_create_project_from_pending_inputs_does_not_register_audio_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            controller = AutoscoreController(workspace)
+
+            controller.create_project_from_pending_inputs(project_id="demo", input_paths=[source_audio])
+            loaded = ProjectManifest.load(workspace / "demo" / "manifest.json")
+            copied_audio = (workspace / "demo" / "inbox" / "song.wav").read_bytes()
+
+        self.assertEqual(loaded.artifacts, {})
+        self.assertEqual(loaded.metadata["pendingInputs"][0]["relativePath"], "inbox/song.wav")
+        self.assertEqual(copied_audio, b"audio")
+
+    def test_run_step_binds_pending_audio_as_original_for_separate_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            controller = AutoscoreController(workspace)
+            controller.create_project_from_pending_inputs(project_id="demo", input_paths=[source_audio])
+
+            result = controller.run_step("demo", "separateAudio")
+            manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
+            copied_audio = (workspace / "demo" / "input" / "original_audio.wav").read_bytes()
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertIn("artifact_original_audio", manifest.artifacts)
+        self.assertEqual(manifest.artifacts["artifact_original_audio"].metadata["boundFromPendingInput"], "inbox/song.wav")
+        self.assertEqual(manifest.metadata["pendingInputs"][0]["status"], "bound")
+        self.assertEqual(manifest.steps["separateAudio"].input_artifact_ids, ["artifact_original_audio"])
+        self.assertEqual(copied_audio, b"audio")
+
+    def test_run_step_binds_pending_audio_as_vocals_for_detect_phrases(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "vocals.wav"
+            source_audio.write_bytes(b"vocals")
+            controller = AutoscoreController(workspace)
+            controller.create_project_from_pending_inputs(project_id="demo", input_paths=[source_audio])
+
+            result = controller.run_step("demo", "detectPhrases")
+            manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
+            copied_audio = (workspace / "demo" / "audio" / "vocals.wav").read_bytes()
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertIn("artifact_vocals_wav", manifest.artifacts)
+        self.assertEqual(manifest.artifacts["artifact_vocals_wav"].metadata["boundFromPendingInput"], "inbox/vocals.wav")
+        self.assertEqual(manifest.steps["detectPhrases"].input_artifact_ids, ["artifact_vocals_wav"])
+        self.assertEqual(copied_audio, b"vocals")
+
+    def test_run_step_discovers_unregistered_project_inbox_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            project_dir = workspace / "demo"
+            inbox_dir = project_dir / "inbox"
+            inbox_dir.mkdir(parents=True)
+            (inbox_dir / "song.wav").write_bytes(b"audio")
+            controller = AutoscoreController(workspace)
+            ProjectManifest(project_id="demo", project_dir=str(project_dir)).save(project_dir / "manifest.json")
+
+            result = controller.run_step("demo", "separateAudio")
+            manifest = ProjectManifest.load(project_dir / "manifest.json")
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertIn("artifact_original_audio", manifest.artifacts)
+        self.assertEqual(manifest.metadata["pendingInputs"][0]["artifactId"], "artifact_original_audio")
+
+    def test_run_step_binds_matching_global_inbox_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace = root / "workspaces"
+            global_inbox = root / "inbox"
+            project_dir = workspace / "Vox"
+            global_inbox.mkdir(parents=True)
+            project_dir.mkdir(parents=True)
+            inbox_audio = global_inbox / "Vox.wav"
+            inbox_audio.write_bytes(b"vocals")
+            controller = AutoscoreController(
+                workspace,
+                app_config=AppConfig(import_dir=str(global_inbox)),
+            )
+            ProjectManifest(project_id="Vox", project_dir=str(project_dir)).save(project_dir / "manifest.json")
+
+            result = controller.run_step("Vox", "detectPhrases")
+            manifest = ProjectManifest.load(project_dir / "manifest.json")
+            copied_audio = (project_dir / "audio" / "vocals.wav").read_bytes()
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertIn("artifact_vocals_wav", manifest.artifacts)
+        self.assertEqual(manifest.metadata["pendingInputs"][0]["sourcePath"], str(inbox_audio))
+        self.assertEqual(manifest.metadata["pendingInputs"][0]["artifactId"], "artifact_vocals_wav")
+        self.assertEqual(copied_audio, b"vocals")
+
     def test_uses_configured_workspace_when_not_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir) / "configured-workspaces"
