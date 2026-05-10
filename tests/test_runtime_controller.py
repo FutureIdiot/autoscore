@@ -75,6 +75,16 @@ class AutoscoreControllerTests(unittest.TestCase):
                 )
             )
             manifest.set_step_status("createProject", "succeeded", output_artifact_ids=["artifact_original_audio"])
+            manifest.set_step_status(
+                "estimateTempo",
+                "succeeded",
+                execution={"mode": "local", "transport": "in_process", "nodeId": "timeline-local"},
+            )
+            manifest.set_step_status(
+                "separateAudio",
+                "succeeded",
+                execution={"mode": "local", "transport": "in_process", "nodeId": "audio-local"},
+            )
             project_dir = workspace / "project_001"
             manifest.save(project_dir / "manifest.json")
 
@@ -82,8 +92,10 @@ class AutoscoreControllerTests(unittest.TestCase):
 
         self.assertEqual(status.summary.project_id, "project_001")
         self.assertEqual(status.artifact_ids, ["artifact_original_audio"])
-        self.assertEqual(status.steps[0].task_type, "createProject")
+        self.assertEqual([step.task_type for step in status.steps], ["createProject", "separateAudio", "estimateTempo"])
         self.assertEqual(status.steps[0].status, "succeeded")
+        self.assertEqual(status.steps[1].execution_node_id, "audio-local")
+        self.assertEqual(status.steps[2].execution_node_id, "timeline-local")
 
     def test_create_project_imports_inputs_and_writes_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -97,6 +109,7 @@ class AutoscoreControllerTests(unittest.TestCase):
                 audio_path=source_audio,
                 lyrics_text="hello world",
                 global_tempo=120,
+                meter={"numerator": 3, "denominator": 4},
             )
 
             project_dir = workspace / "demo"
@@ -106,6 +119,7 @@ class AutoscoreControllerTests(unittest.TestCase):
 
         self.assertEqual(manifest.project_id, "demo")
         self.assertEqual(loaded.metadata["manual"]["globalTempo"], 120)
+        self.assertEqual(loaded.metadata["manual"]["meter"], {"numerator": 3, "denominator": 4})
         self.assertIn("artifact_original_audio", loaded.artifacts)
         self.assertIn("artifact_lyrics_txt", loaded.artifacts)
         self.assertIn("artifact_manual_metadata_json", loaded.artifacts)
@@ -222,6 +236,8 @@ class AutoscoreControllerTests(unittest.TestCase):
                     "hello",
                     "--tempo",
                     "120",
+                    "--meter",
+                    "6/8",
                 ]
             )
 
@@ -229,6 +245,7 @@ class AutoscoreControllerTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(manifest.project_id, "demo")
+        self.assertEqual(manifest.metadata["manual"]["meter"], {"numerator": 6, "denominator": 8})
 
     def test_create_projects_from_configured_import_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -252,6 +269,26 @@ class AutoscoreControllerTests(unittest.TestCase):
             self.assertFalse((import_dir / "Song A.wav").exists())
             self.assertFalse((import_dir / "Song A.txt").exists())
             self.assertFalse((import_dir / "Song B.flac").exists())
+
+    def test_create_projects_from_import_dir_accepts_manual_tempo_and_meter(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            import_dir = root / "imports"
+            import_dir.mkdir()
+            (import_dir / "song.wav").write_bytes(b"audio")
+            controller = AutoscoreController(
+                root / "workspaces",
+                app_config=AppConfig(import_dir=str(import_dir), default_tempo=120),
+            )
+
+            controller.create_projects_from_import_dir(
+                default_tempo=132,
+                meter={"numerator": 3, "denominator": 4},
+            )
+            manifest = ProjectManifest.load(root / "workspaces" / "song" / "manifest.json")
+
+        self.assertEqual(manifest.metadata["manual"]["globalTempo"], 132)
+        self.assertEqual(manifest.metadata["manual"]["meter"], {"numerator": 3, "denominator": 4})
 
     def test_create_projects_from_import_dir_rejects_already_processed_project(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

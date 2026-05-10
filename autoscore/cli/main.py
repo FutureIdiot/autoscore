@@ -23,6 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     lyrics_source.add_argument("--lyrics", help="Lyrics text.")
     lyrics_source.add_argument("--lyrics-file", help="Lyrics text file.")
     create_parser.add_argument("--tempo", type=float, default=None, help="Manual global tempo.")
+    create_parser.add_argument("--meter", default=None, help="Manual meter as numerator/denominator, for example 4/4.")
     create_parser.add_argument("--overwrite", action="store_true", help="Overwrite an existing manifest.")
 
     status_parser = subparsers.add_parser("status", help="Show one project status.")
@@ -52,6 +53,7 @@ def main(argv: list[str] | None = None) -> int:
             lyrics_text=args.lyrics,
             lyrics_path=args.lyrics_file,
             global_tempo=args.tempo,
+            meter=_parse_meter(args.meter) if args.meter else None,
             overwrite=args.overwrite,
         )
         print(f"Created project {manifest.project_id}: {manifest.project_dir}")
@@ -85,6 +87,20 @@ def print_project_status(status: object) -> None:
             f"in={step.input_artifact_count} out={step.output_artifact_count} "
             f"warn={step.warning_count} err={step.error_count}"
         )
+
+
+def _parse_meter(value: str) -> dict[str, int]:
+    parts = value.split("/", maxsplit=1)
+    if len(parts) != 2:
+        raise ValueError("meter must be formatted as numerator/denominator, for example 4/4")
+    try:
+        numerator = int(parts[0].strip())
+        denominator = int(parts[1].strip())
+    except ValueError as exc:
+        raise ValueError("meter numerator and denominator must be integers") from exc
+    if numerator <= 0 or denominator <= 0:
+        raise ValueError("meter numerator and denominator must be positive")
+    return {"numerator": numerator, "denominator": denominator}
 
 
 if __name__ == "__main__":

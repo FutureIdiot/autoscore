@@ -15,6 +15,17 @@ from autoscore.runtime.runners import build_task_envelope, get_local_runner, inp
 from autoscore.runtime.tasks import TaskResult
 
 _PROJECT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+_PIPELINE_TASK_ORDER = (
+    "createProject",
+    "separateAudio",
+    "estimateTempo",
+    "detectPhrases",
+    "runGame",
+    "runLyricFA",
+    "alignPhrase",
+    "stitchPhrases",
+    "buildScoreJson",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +52,8 @@ class StepStatus:
     warning_count: int = 0
     error_count: int = 0
     updated_at: str = ""
+    execution_node_id: str = ""
+    execution_transport: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +168,7 @@ class AutoscoreController:
         *,
         import_dir: str | Path | None = None,
         default_tempo: float | None = None,
+        meter: dict[str, object] | None = None,
         overwrite: bool = False,
         fail_on_processed: bool = True,
     ) -> list[ProjectCreateResult]:
@@ -196,6 +210,7 @@ class AutoscoreController:
                     lyrics_path=lyrics_path if lyrics_path.exists() else None,
                     lyrics_text="" if not lyrics_path.exists() else None,
                     global_tempo=tempo,
+                    meter=meter,
                     overwrite=overwrite,
                 )
             except FileExistsError:
@@ -245,8 +260,10 @@ class AutoscoreController:
                 warning_count=len(step.warnings),
                 error_count=len(step.errors),
                 updated_at=step.updated_at,
+                execution_node_id=str(step.execution.get("nodeId", "")),
+                execution_transport=str(step.execution.get("transport", "")),
             )
-            for step in sorted(manifest.steps.values(), key=lambda item: item.task_type)
+            for step in sorted(manifest.steps.values(), key=_pipeline_step_sort_key)
         ]
         return ProjectStatus(
             summary=summary,
@@ -374,3 +391,11 @@ def _problem_to_message(problem: object) -> str:
     code = getattr(problem, "code", "")
     message = getattr(problem, "message", str(problem))
     return f"{code}: {message}" if code else message
+
+
+def _pipeline_step_sort_key(step: object) -> tuple[int, str]:
+    task_type = getattr(step, "task_type", "")
+    try:
+        return (_PIPELINE_TASK_ORDER.index(task_type), task_type)
+    except ValueError:
+        return (len(_PIPELINE_TASK_ORDER), task_type)

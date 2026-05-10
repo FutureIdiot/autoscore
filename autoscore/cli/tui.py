@@ -89,8 +89,18 @@ def _create_from_import_dir(controller: AutoscoreController, *, overwrite: bool 
     print(f"Default tempo: {controller.app_config.default_tempo}")
     print(f"Overwrite existing projects: {overwrite}")
     print()
+    tempo = _prompt_optional_float(
+        "Manual tempo BPM (blank=use configured default/auto): ",
+        field_name="tempo",
+    )
+    meter = _prompt_meter("Meter, e.g. 4/4 (blank=4/4 later): ")
+    print()
     try:
-        results = controller.create_projects_from_import_dir(overwrite=overwrite)
+        results = controller.create_projects_from_import_dir(
+            default_tempo=tempo,
+            meter=meter,
+            overwrite=overwrite,
+        )
     except Exception as exc:
         print(f"Failed: {exc}")
         _prompt("Press Enter to continue: ")
@@ -132,8 +142,10 @@ def _print_project_status(status: ProjectStatus) -> None:
     if not status.steps:
         print("(no steps)")
     for step in status.steps:
+        node = step.execution_node_id or "-"
         print(
             f"{step.task_type:20} {step.status:10} "
+            f"node={node:14} "
             f"in={step.input_artifact_count} out={step.output_artifact_count} "
             f"warn={step.warning_count} err={step.error_count}"
         )
@@ -159,6 +171,43 @@ def _prompt(text: str) -> str:
         return input(text)
     except EOFError:
         return "q"
+
+
+def _prompt_optional_float(text: str, *, field_name: str) -> float | None:
+    while True:
+        value = _prompt(text).strip()
+        if not value or value.lower() == "q":
+            return None
+        try:
+            parsed = float(value)
+        except ValueError:
+            print(f"Invalid {field_name}: expected a number.")
+            continue
+        if parsed <= 0:
+            print(f"Invalid {field_name}: expected a positive number.")
+            continue
+        return parsed
+
+
+def _prompt_meter(text: str) -> dict[str, int] | None:
+    while True:
+        value = _prompt(text).strip()
+        if not value or value.lower() == "q":
+            return None
+        parts = value.split("/", maxsplit=1)
+        if len(parts) != 2:
+            print("Invalid meter: expected numerator/denominator, for example 4/4.")
+            continue
+        try:
+            numerator = int(parts[0].strip())
+            denominator = int(parts[1].strip())
+        except ValueError:
+            print("Invalid meter: numerator and denominator must be integers.")
+            continue
+        if numerator <= 0 or denominator <= 0:
+            print("Invalid meter: numerator and denominator must be positive.")
+            continue
+        return {"numerator": numerator, "denominator": denominator}
 
 
 def _clear_screen() -> None:
