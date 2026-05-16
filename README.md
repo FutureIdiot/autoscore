@@ -66,9 +66,21 @@ uv run autoscore tui
 
 For TUI project creation, copy `config/autoscore.local.example.json` to
 `config/autoscore.local.json`, set `workspaceRoot` to the project workspace
-directory, and optionally set `importDir` to the directory where you drop audio
-files and optional same-name `.txt` lyric files. If `importDir` is not set, the
-TUI uses the repository-local `inbox/` folder.
+directory, and optionally set `importDir` to the directory where you drop
+initial files. If `importDir` is not set, the TUI uses the repository-local
+`inbox/` folder.
+
+Initial files are grouped into workspaces by filename prefix:
+
+```text
+songname.wav          original/full audio candidate
+songname.txt          lyrics candidate
+songname_vox.wav      vocals candidate
+songname_instrument.wav accompaniment candidate
+```
+
+Files with the same prefix create one workspace. The suffix only helps create
+grouping; artifact roles are registered later from pending inputs.
 
 Current TUI command shape:
 
@@ -83,16 +95,19 @@ send TASK             send current artifacts to one named task, e.g. send detect
 ```
 
 The `create` command creates project control state first and keeps discovered
-input audio as pending project input rather than guessing its artifact role.
-Sending to a task is a separate step. When a task requires audio that has not
-yet been registered as an artifact, the controller binds a matching pending
-input to that task's required artifact, for example `artifact_original_audio`
-for `separateAudio` or `artifact_vocals_wav` for `detectPhrases`.
+files as pending project inputs. Sending to a task is a separate step. Before a
+task runs, pending files are registered as artifacts by filename purpose:
+names containing `vox` or `vocal` become `artifact_vocals_wav`, names
+containing `instrument` or `accompaniment` become `artifact_accompaniment_wav`,
+plain audio becomes `artifact_original_audio`, and `.txt` becomes
+`artifact_lyrics_txt`.
 
 Task readiness is based on required artifacts only; optional context such as
 lyrics, manual metadata, or tempo may be absent and should surface as task
 warnings instead of blocking execution. The project `info` command can update
-manual tempo and meter after creation.
+manual tempo and meter after creation. If a task's expected output artifacts
+already exist, `send` skips that task and continues downstream; add `!` to force
+the task to rerun and overwrite its outputs.
 
 ## Current Runtime Model
 
@@ -132,8 +147,8 @@ communicate with.
 - Artifact-driven task dispatch with required and optional input contracts.
 - Pending input binding at send time for task-specific audio artifact roles.
 - TUI project info view/edit for manual tempo and meter.
-- Empty project creation, provided artifact attachment, provided vocals, and
-  provided tempo timeline support.
+- Empty project creation, pending input registration, provided artifact
+  attachment, and provided tempo timeline support.
 - Mock `separateAudio`, `estimateTempo`, and `detectPhrases` runners wired
   through controller/TUI send execution.
 - Timeline foundation models:

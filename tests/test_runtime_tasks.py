@@ -2,6 +2,7 @@ import unittest
 
 from autoscore.core.artifacts import ArtifactRef
 from autoscore.core.problems import ProblemRecord
+from autoscore.constants import TASK_ENVELOPE_SCHEMA_VERSION, TASK_REQUIREMENTS_SCHEMA_VERSION
 from autoscore.runtime import ExecutionInfo, TaskEnvelope, TaskRequirements, TaskResult
 
 
@@ -30,6 +31,13 @@ class RuntimeTaskTests(unittest.TestCase):
         self.assertEqual(data["inputArtifacts"][0]["artifactId"], "artifact_original_audio")
         self.assertEqual(data["requirements"]["nodeTypes"], ["separator-node"])
         self.assertEqual(TaskEnvelope.from_dict(data), envelope)
+
+    def test_task_contract_schema_versions_are_explicit(self) -> None:
+        envelope = TaskEnvelope(task_id="task_001", project_id="project_001", task_type="separateAudio")
+        requirements = TaskRequirements()
+
+        self.assertEqual(envelope.schema_version, TASK_ENVELOPE_SCHEMA_VERSION)
+        self.assertEqual(requirements.schema_version, TASK_REQUIREMENTS_SCHEMA_VERSION)
 
     def test_task_result_round_trip_uses_problem_records(self) -> None:
         result = TaskResult(

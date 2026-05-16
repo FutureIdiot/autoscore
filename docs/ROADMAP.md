@@ -19,8 +19,8 @@ older private implementation lists that may exist locally under
 - Artifact-driven dispatch with required and optional task input contracts.
 - Pending input binding at send time for task-specific audio artifact roles.
 - TUI project info view/edit for manual tempo and meter.
-- Empty project creation, provided artifact attachment, provided vocals, and
-  provided tempo timeline support.
+- Empty project creation, pending input registration, provided artifact
+  attachment, and provided tempo timeline support.
 - Mock `separateAudio`, `estimateTempo`, and `detectPhrases` runners wired
   through controller/TUI send execution.
 - Timeline foundation models and tests.
@@ -28,18 +28,24 @@ older private implementation lists that may exist locally under
 ## Current Development State
 
 - `create` in the TUI creates project workspaces from `importDir` or `inbox/`,
-  or creates an empty workspace when no files are present. Discovered audio is
-  kept as pending input until a target task declares the artifact it needs.
+  or creates an empty workspace when no files are present. Initial files are
+  grouped by prefix, so `songname.wav`, `songname.txt`, and
+  `songname_vox.wav` create one workspace. Discovered files are kept as pending
+  inputs until send-time registration.
 - `send` dispatches project artifacts to numbered or named node tasks. It can
   run the ready pipeline, a single task, or a downstream chain with `&`; `!`
   forces reruns.
-- If a target task is missing a required audio artifact and a pending input is
-  available, the controller binds that input to the task-specific artifact role
-  before execution:
+- If a task's expected output artifacts already exist, `send` skips that task
+  and continues downstream. Adding `!` forces the task to rerun and overwrite
+  those outputs.
+- Before a task runs, pending inputs are registered as artifacts from filename
+  purpose:
 
   ```text
-  send separateAudio    pending audio -> artifact_original_audio
-  send detectPhrases    pending audio -> artifact_vocals_wav
+  *vox* or *vocal*                 -> artifact_vocals_wav
+  *instrument* or *accompaniment*  -> artifact_accompaniment_wav
+  *.txt                            -> artifact_lyrics_txt
+  plain audio                      -> artifact_original_audio
   ```
 
 - `info` in the project TUI shows and edits manual tempo and meter, updating
@@ -75,24 +81,30 @@ older private implementation lists that may exist locally under
    Clarify how forced reruns invalidate or preserve downstream artifacts, and
    make resumed cross-step execution predictable once more tasks exist.
 
-4. Real Timeline Analysis
+4. Structured Problem Persistence
+
+   Keep `TaskResult` warnings/errors as `ProblemRecord` objects and migrate
+   durable controller/manifest warning and error persistence from plain strings
+   to structured records after the mock pipeline is stable.
+
+5. Real Timeline Analysis
 
    Add tempo and phrase detection backends. Start with lightweight mocked or
    librosa-based behavior, then evaluate Essentia when needed.
 
-5. External Integrations
+6. External Integrations
 
    Integrate GAME and LyricFA behind their package boundaries. Keep their local
    Python paths and model paths in package config or provenance, not in project
    manifests.
 
-6. Node Registry Serialization
+7. Node Registry Serialization
 
    Add `to_dict`/`from_dict` support and file/remote loading for the
    deployment package -> node capability -> task type mapping described in
    `docs/ARCHITECTURE.md`.
 
-7. Score Export
+8. Score Export
 
    Implement canonical score schema models, validation, bar generation, and
    `score.json` export after the mock pipeline is stable.

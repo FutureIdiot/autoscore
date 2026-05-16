@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from autoscore.runtime import AutoscoreController, ProjectStatus, project_id_from_name
+from autoscore.runtime import AutoscoreController, ProjectStatus, input_group_name_from_path, project_id_from_name
 
 
 def run_tui(controller: AutoscoreController) -> None:
@@ -231,18 +231,20 @@ def _create_project(controller: AutoscoreController, *, overwrite: bool = False)
             field_name="tempo",
         )
         meter = _prompt_meter("Meter, e.g. 4/4 (blank=4/4 later): ")
-        audio_files = _audio_files_from_inbox(controller)
+        input_groups = _input_groups_from_inbox(controller)
         manifests = []
-        if audio_files:
+        if input_groups:
             print()
-            print("Detected audio files:")
-            for audio_file in audio_files:
-                print(f"- {audio_file.name}")
-            for audio_path in audio_files:
+            print("Detected input groups:")
+            for group_name, input_files in input_groups:
+                filenames = ", ".join(path.name for path in input_files)
+                print(f"- {group_name}: {filenames}")
+            for group_name, input_files in input_groups:
                 manifests.append(
-                    _create_project_for_audio_file(
+                    _create_project_for_input_group(
                         controller,
-                        audio_path=audio_path,
+                        group_name=group_name,
+                        input_files=input_files,
                         tempo=tempo,
                         meter=meter,
                         overwrite=overwrite,
@@ -265,18 +267,19 @@ def _create_project(controller: AutoscoreController, *, overwrite: bool = False)
     _prompt("Press Enter to continue: ")
 
 
-def _create_project_for_audio_file(
+def _create_project_for_input_group(
     controller: AutoscoreController,
     *,
-    audio_path: Path,
+    group_name: str,
+    input_files: list[Path],
     tempo: float | None,
     meter: dict[str, int] | None,
     overwrite: bool,
 ):
-    project_id = project_id_from_name(audio_path.stem)
+    project_id = project_id_from_name(group_name)
     manifest = controller.create_project_from_pending_inputs(
         project_id=project_id,
-        input_paths=[audio_path],
+        input_paths=input_files,
         overwrite=overwrite,
     )
     manifest.metadata["manual"] = {
@@ -315,97 +318,18 @@ def _print_help() -> None:
     _prompt("Press Enter to continue: ")
 
 
-def _create_from_import_dir(controller: AutoscoreController, *, overwrite: bool = False) -> None:
-    _clear_screen()
-    print("Create Projects From Import Directory")
-    print("-------------------------------------")
-    print(f"Configured import dir: {controller.app_config.import_dir or '(not configured)'}")
-    print(f"Default tempo: {controller.app_config.default_tempo}")
-    print(f"Overwrite existing projects: {overwrite}")
-    print()
-    tempo = _prompt_optional_float(
-        "Manual tempo BPM (blank=use configured default/auto): ",
-        field_name="tempo",
-    )
-    meter = _prompt_meter("Meter, e.g. 4/4 (blank=4/4 later): ")
-    print()
-    try:
-        results = controller.create_projects_from_import_dir(
-            default_tempo=tempo,
-            meter=meter,
-            overwrite=overwrite,
-        )
-    except Exception as exc:
-        print(f"Failed: {exc}")
-        _prompt("Press Enter to continue: ")
-        return
-    if not results:
-        print("No audio files found.")
-    for result in results:
-        line = f"{result.status:8} {result.project_id} <- {result.audio_path}"
-        if result.message:
-            line += f" ({result.message})"
-        print(line)
-    _prompt("Press Enter to continue: ")
-
-
-def _create_from_provided_vocals(controller: AutoscoreController, *, overwrite: bool = False) -> None:
-    _clear_screen()
-    print("Create Project From Provided Vocals")
-    print("-----------------------------------")
-    print(f"Inbox/import dir: {_provided_audio_inbox(controller)}")
-    print(f"Overwrite existing projects: {overwrite}")
-    print()
-    try:
-        vocals_path = _select_audio_file_from_import_dir(controller)
-        if vocals_path is None:
-            print("No vocals file selected.")
-            _prompt("Press Enter to continue: ")
-            return
-        default_project_id = project_id_from_name(vocals_path.stem)
-        project_id = _prompt(f"Project id (blank={default_project_id}): ").strip() or default_project_id
-        tempo = _prompt_optional_float(
-            "Manual tempo BPM (blank=120 mock default): ",
-            field_name="tempo",
-        )
-        meter = _prompt_meter("Meter, e.g. 4/4 (blank=4/4 later): ")
-        manifest = controller.create_project_from_provided_vocals(
-            project_id=project_id,
-            vocals_path=vocals_path,
-            global_tempo=tempo,
-            meter=meter,
-            overwrite=overwrite,
-        )
-        result = controller.run_step(manifest.project_id, "detectPhrases")
-    except Exception as exc:
-        print(f"Failed: {exc}")
-    else:
-        print(f"Created {manifest.project_id} from provided vocals.")
-        print(f"{result.task_type}: {result.status}")
-    _prompt("Press Enter to continue: ")
-
-
-def _select_audio_file_from_import_dir(controller: AutoscoreController) -> Path | None:
-    audio_files = _audio_files_from_inbox(controller)
-    if not audio_files:
-        print("No audio files found.")
-        return None
-    for index, audio_file in enumerate(audio_files, start=1):
-        print(f"{index}. {audio_file.name}")
-    choice = _prompt("Select vocals file number, or blank=cancel: ").strip()
-    if not choice:
-        return None
-    if not choice.isdigit() or not 1 <= int(choice) <= len(audio_files):
-        raise ValueError("invalid audio file selection")
-    return audio_files[int(choice) - 1]
-
-
-def _audio_files_from_inbox(controller: AutoscoreController) -> list[Path]:
+def _input_groups_from_inbox(controller: AutoscoreController) -> list[tuple[str, list[Path]]]:
     root = _provided_audio_inbox(controller)
     if not root.is_dir():
         raise FileNotFoundError(root)
-    audio_extensions = {extension.lower() for extension in controller.app_config.audio_extensions}
-    return sorted(path for path in root.iterdir() if path.is_file() and path.suffix.lower() in audio_extensions)
+    input_extensions = {extension.lower() for extension in controller.app_config.audio_extensions}
+    input_extensions.add(".txt")
+    grouped: dict[str, list[Path]] = {}
+    for path in sorted(root.iterdir()):
+        if not path.is_file() or path.suffix.lower() not in input_extensions:
+            continue
+        grouped.setdefault(input_group_name_from_path(path), []).append(path)
+    return sorted(grouped.items(), key=lambda item: project_id_from_name(item[0]).lower())
 
 
 def _provided_audio_inbox(controller: AutoscoreController) -> Path:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from autoscore.constants import SCHEMA_VERSION
+from autoscore.constants import PROJECT_MANIFEST_SCHEMA_VERSION
 
 
 def migrate_manifest_dict(data: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -17,12 +17,12 @@ def migrate_manifest_dict(data: dict[str, Any]) -> tuple[dict[str, Any], list[st
     """
 
     migrated = deepcopy(data)
-    source_version = migrated.get("schemaVersion", SCHEMA_VERSION)
+    source_version = migrated.get("schemaVersion", PROJECT_MANIFEST_SCHEMA_VERSION)
     warnings: list[str] = []
 
-    if source_version != SCHEMA_VERSION:
+    if source_version != PROJECT_MANIFEST_SCHEMA_VERSION:
         warnings.append(
-            f"manifest schemaVersion {source_version} differs from current {SCHEMA_VERSION}; "
+            f"manifest schemaVersion {source_version} differs from current {PROJECT_MANIFEST_SCHEMA_VERSION}; "
             "no automatic migration is available yet"
         )
 

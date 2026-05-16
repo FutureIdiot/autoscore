@@ -16,7 +16,9 @@ from autoscore.runtime.runners import (
     build_task_envelope,
     get_local_runner,
     implemented_task_types,
+    node_id_for_task,
     optional_input_artifact_ids_for_task,
+    output_artifact_ids_for_task,
     required_input_artifact_ids_for_task,
 )
 from autoscore.runtime.tasks import TaskResult
@@ -34,9 +36,38 @@ _PIPELINE_TASK_ORDER = (
     "buildScoreJson",
 )
 _PENDING_INPUTS_METADATA_KEY = "pendingInputs"
-_AUDIO_ARTIFACT_BINDINGS = {
-    "artifact_original_audio": ("input/original_audio.wav", "originalAudio"),
-    "artifact_vocals_wav": ("audio/vocals.wav", "vocals"),
+
+
+@dataclass(frozen=True, slots=True)
+class InputArtifactSpec:
+    """How one pending input role is registered into the project artifact set."""
+
+    artifact_id: str
+    kind: str
+    relative_path: str
+
+
+_INPUT_ARTIFACT_SPECS = {
+    "originalAudio": InputArtifactSpec(
+        artifact_id="artifact_original_audio",
+        kind="audio/wav",
+        relative_path="input/original_audio.wav",
+    ),
+    "vocals": InputArtifactSpec(
+        artifact_id="artifact_vocals_wav",
+        kind="audio/wav",
+        relative_path="audio/vocals.wav",
+    ),
+    "accompaniment": InputArtifactSpec(
+        artifact_id="artifact_accompaniment_wav",
+        kind="audio/wav",
+        relative_path="audio/accompaniment.wav",
+    ),
+    "lyrics": InputArtifactSpec(
+        artifact_id="artifact_lyrics_txt",
+        kind="text/plain",
+        relative_path="input/lyrics.txt",
+    ),
 }
 
 
@@ -141,6 +172,8 @@ class AutoscoreController:
         manifest_path = project_dir / "manifest.json"
         if manifest_path.exists() and not overwrite:
             raise FileExistsError(manifest_path)
+        if manifest_path.exists() and overwrite:
+            shutil.rmtree(project_dir)
 
         project_dir.mkdir(parents=True, exist_ok=True)
         manifest = ProjectManifest(project_id=project_id, project_dir=str(project_dir))
@@ -185,7 +218,7 @@ class AutoscoreController:
                 {
                     "relativePath": relative_path,
                     "sourcePath": str(source),
-                    "kind": _kind_for_audio_path(source),
+                    "kind": _kind_for_input_path(source),
                     "status": "pending",
                 }
             )
@@ -205,54 +238,43 @@ class AutoscoreController:
         key: dict[str, object] | None = None,
         overwrite: bool = False,
     ) -> ProjectManifest:
-        """Create a project workspace and manifest from user inputs."""
+        """Create a project workspace with user inputs left pending."""
 
         self._validate_project_id(project_id)
         if lyrics_text is None and lyrics_path is None:
             raise ValueError("lyrics_text or lyrics_path is required")
 
-        project_dir = self.workspace_root / project_id
-        manifest_path = project_dir / "manifest.json"
-        if manifest_path.exists() and not overwrite:
-            raise FileExistsError(manifest_path)
-
-        project_dir.mkdir(parents=True, exist_ok=True)
-        store = LocalArtifactStore(project_dir)
-        manifest = ProjectManifest(project_id=project_id, project_dir=str(project_dir))
-
-        audio_ref = store.import_file(
-            audio_path,
-            kind="audio/wav",
-            relative_path="input/original_audio.wav",
-            artifact_id="artifact_original_audio",
+        pending_paths = [Path(audio_path)]
+        if lyrics_path is not None:
+            pending_paths.append(Path(lyrics_path))
+        manifest = self.create_project_from_pending_inputs(
+            project_id=project_id,
+            input_paths=pending_paths,
+            overwrite=overwrite,
         )
-        manifest.register_artifact(audio_ref)
-
-        lyrics_ref = self._write_lyrics_artifact(store, lyrics_text=lyrics_text, lyrics_path=lyrics_path)
-        manifest.register_artifact(lyrics_ref)
-
-        metadata_ref = self._write_manual_metadata_artifact(
-            store,
-            global_tempo=global_tempo,
-            meter=meter,
-            key=key,
-        )
-        manifest.register_artifact(metadata_ref)
+        if lyrics_text is not None:
+            project_dir = Path(manifest.project_dir)
+            store = LocalArtifactStore(project_dir)
+            text_path = store.resolve_relative_path("inbox/lyrics.txt")
+            text_path.parent.mkdir(parents=True, exist_ok=True)
+            text_path.write_text(lyrics_text, encoding="utf-8", newline="\n")
+            manifest = ProjectManifest.load(project_dir / "manifest.json")
+            pending_inputs = _pending_inputs(manifest)
+            pending_inputs.append(
+                {
+                    "relativePath": "inbox/lyrics.txt",
+                    "sourcePath": "",
+                    "kind": "text/plain",
+                    "status": "pending",
+                }
+            )
+            manifest.metadata[_PENDING_INPUTS_METADATA_KEY] = pending_inputs
         manifest.metadata["manual"] = {
             "globalTempo": global_tempo,
             "meter": meter or {},
             "key": key or {},
         }
-        manifest.set_step_status(
-            "createProject",
-            "succeeded",
-            output_artifact_ids=[
-                audio_ref.artifact_id,
-                lyrics_ref.artifact_id,
-                metadata_ref.artifact_id,
-            ],
-        )
-        manifest.save(manifest_path)
+        manifest.save(self._manifest_path(project_id))
         return manifest
 
     def create_projects_from_import_dir(
@@ -262,9 +284,9 @@ class AutoscoreController:
         default_tempo: float | None = None,
         meter: dict[str, object] | None = None,
         overwrite: bool = False,
-        fail_on_processed: bool = True,
+        fail_on_processed: bool = False,
     ) -> list[ProjectCreateResult]:
-        """Create projects for audio files in the configured import directory."""
+        """Create projects from grouped files in the configured import directory."""
 
         selected_import_dir = Path(import_dir or self.app_config.import_dir or "")
         if not str(selected_import_dir):
@@ -273,43 +295,44 @@ class AutoscoreController:
             raise FileNotFoundError(selected_import_dir)
 
         tempo = default_tempo if default_tempo is not None else self.app_config.default_tempo
-        audio_extensions = {extension.lower() for extension in self.app_config.audio_extensions}
-        audio_files = sorted(
-            path for path in selected_import_dir.iterdir() if path.is_file() and path.suffix.lower() in audio_extensions
+        input_groups = _group_initial_input_files(
+            selected_import_dir,
+            audio_extensions=self.app_config.audio_extensions,
         )
         results: list[ProjectCreateResult] = []
-        for audio_file in audio_files:
-            project_id = project_id_from_name(audio_file.stem)
-            lyrics_path = audio_file.with_suffix(".txt")
+        for project_name, input_files in input_groups:
+            project_id = project_id_from_name(project_name)
             manifest_path = self._manifest_path(project_id)
             if manifest_path.exists() and not overwrite:
-                message = f"project {project_id!r} has already been processed: {manifest_path}"
+                message = "project already exists"
                 if fail_on_processed:
-                    raise ProjectAlreadyProcessedError(message)
+                    raise ProjectAlreadyProcessedError(f"{message}: {manifest_path}")
                 results.append(
                     ProjectCreateResult(
                         project_id=project_id,
-                        audio_path=str(audio_file),
-                        status="failed",
+                        audio_path=", ".join(str(path) for path in input_files),
+                        status="skipped",
                         message=message,
                     )
                 )
                 continue
             try:
-                self.create_project(
+                manifest = self.create_project_from_pending_inputs(
                     project_id=project_id,
-                    audio_path=audio_file,
-                    lyrics_path=lyrics_path if lyrics_path.exists() else None,
-                    lyrics_text="" if not lyrics_path.exists() else None,
-                    global_tempo=tempo,
-                    meter=meter,
+                    input_paths=input_files,
                     overwrite=overwrite,
                 )
+                manifest.metadata["manual"] = {
+                    "globalTempo": tempo,
+                    "meter": meter or {},
+                    "key": {},
+                }
+                manifest.save(self._manifest_path(project_id))
             except FileExistsError:
                 results.append(
                     ProjectCreateResult(
                         project_id=project_id,
-                        audio_path=str(audio_file),
+                        audio_path=", ".join(str(path) for path in input_files),
                         status="skipped",
                         message="project already exists",
                     )
@@ -318,88 +341,22 @@ class AutoscoreController:
                 results.append(
                     ProjectCreateResult(
                         project_id=project_id,
-                        audio_path=str(audio_file),
+                        audio_path=", ".join(str(path) for path in input_files),
                         status="failed",
                         message=str(exc),
                     )
                 )
             else:
-                audio_file.unlink()
-                if lyrics_path.exists():
-                    lyrics_path.unlink()
+                for input_file in input_files:
+                    input_file.unlink()
                 results.append(
                     ProjectCreateResult(
                         project_id=project_id,
-                        audio_path=str(audio_file),
+                        audio_path=", ".join(str(path) for path in input_files),
                         status="created",
                     )
                 )
         return results
-
-    def create_project_from_provided_vocals(
-        self,
-        *,
-        project_id: str,
-        vocals_path: str | Path,
-        lyrics_text: str = "",
-        global_tempo: float | None = None,
-        meter: dict[str, object] | None = None,
-        overwrite: bool = False,
-    ) -> ProjectManifest:
-        """Create a project that starts from a user-provided vocals artifact."""
-
-        self._validate_project_id(project_id)
-        project_dir = self.workspace_root / project_id
-        manifest_path = project_dir / "manifest.json"
-        if manifest_path.exists() and not overwrite:
-            raise FileExistsError(manifest_path)
-
-        project_dir.mkdir(parents=True, exist_ok=True)
-        store = LocalArtifactStore(project_dir)
-        manifest = ProjectManifest(project_id=project_id, project_dir=str(project_dir))
-
-        vocals_ref = store.import_file(
-            vocals_path,
-            kind="audio/wav",
-            relative_path="audio/vocals.wav",
-            artifact_id="artifact_vocals_wav",
-            metadata={"provided": True, "providedAs": "vocals"},
-        )
-        manifest.register_artifact(vocals_ref)
-
-        lyrics_ref = self._write_lyrics_artifact(store, lyrics_text=lyrics_text, lyrics_path=None)
-        manifest.register_artifact(lyrics_ref)
-
-        metadata_ref = self._write_manual_metadata_artifact(
-            store,
-            global_tempo=global_tempo,
-            meter=meter,
-            key=None,
-        )
-        manifest.register_artifact(metadata_ref)
-
-        tempo_ref = self._write_provided_tempo_artifact(
-            store,
-            global_tempo=global_tempo,
-        )
-        manifest.register_artifact(tempo_ref)
-        manifest.metadata["manual"] = {
-            "globalTempo": global_tempo,
-            "meter": meter or {},
-            "key": {},
-        }
-        manifest.set_step_status(
-            "createProject",
-            "succeeded",
-            output_artifact_ids=[
-                vocals_ref.artifact_id,
-                lyrics_ref.artifact_id,
-                metadata_ref.artifact_id,
-                tempo_ref.artifact_id,
-            ],
-        )
-        manifest.save(manifest_path)
-        return manifest
 
     def attach_artifact(
         self,
@@ -518,10 +475,12 @@ class AutoscoreController:
         results: list[TaskResult] = []
         while True:
             manifest = ProjectManifest.load(self._manifest_path(project_id))
+            self._register_pending_inputs_as_artifacts(manifest, LocalArtifactStore(manifest.project_dir))
+            manifest.save(self._manifest_path(project_id))
             ready_tasks = [
                 task
                 for task in self._task_readiness(manifest)
-                if task.ready and task.status not in {"running", "succeeded"}
+                if task.ready and _should_run_task(manifest, task.task_type, force=False)
             ]
             if not ready_tasks:
                 return results
@@ -541,6 +500,12 @@ class AutoscoreController:
         if task_type is None:
             return self._run_ready_chain(project_id, start_task_type=None, force=force)
         if not continue_pipeline:
+            manifest = ProjectManifest.load(self._manifest_path(project_id))
+            store = LocalArtifactStore(manifest.project_dir)
+            self._register_pending_inputs_as_artifacts(manifest, store)
+            manifest.save(self._manifest_path(project_id))
+            if not force and _task_outputs_exist(manifest, task_type):
+                return []
             return [self.run_step(project_id, task_type)]
         return self._run_ready_chain(project_id, start_task_type=task_type, force=force)
 
@@ -552,7 +517,8 @@ class AutoscoreController:
         store = LocalArtifactStore(manifest.project_dir)
         required_input_artifact_ids = required_input_artifact_ids_for_task(task_type)
         optional_input_artifact_ids = optional_input_artifact_ids_for_task(task_type)
-        self._bind_pending_inputs_for_missing_required_artifacts(manifest, store, required_input_artifact_ids)
+        self._register_pending_inputs_as_artifacts(manifest, store)
+        manifest.save(manifest_path)
         missing_required_artifact_ids = [
             artifact_id for artifact_id in required_input_artifact_ids if artifact_id not in manifest.artifacts
         ]
@@ -598,13 +564,13 @@ class AutoscoreController:
         manifest.save(manifest_path)
         return result
 
-    def _bind_pending_inputs_for_missing_required_artifacts(
+    def _register_pending_inputs_as_artifacts(
         self,
         manifest: ProjectManifest,
         store: LocalArtifactStore,
-        required_input_artifact_ids: list[str],
     ) -> None:
-        pending_inputs = _available_pending_audio_inputs(
+        self._register_manual_artifacts(manifest, store)
+        pending_inputs = _available_pending_inputs(
             manifest,
             self.app_config.audio_extensions,
             import_dir=self._global_input_dir(),
@@ -613,31 +579,57 @@ class AutoscoreController:
             return
         changed = False
         bound_inputs: list[tuple[dict[str, object], str]] = []
-        for artifact_id in required_input_artifact_ids:
-            if artifact_id in manifest.artifacts or artifact_id not in _AUDIO_ARTIFACT_BINDINGS:
+        for pending_input in pending_inputs:
+            role = _input_role_for_pending_input(pending_input)
+            spec = _INPUT_ARTIFACT_SPECS[role]
+            if spec.artifact_id in manifest.artifacts:
+                pending_input["status"] = "skipped"
+                pending_input["artifactId"] = spec.artifact_id
+                pending_input["skippedReason"] = "artifact already registered"
+                bound_inputs.append((pending_input, spec.artifact_id))
+                changed = True
                 continue
-            pending_input = pending_inputs.pop(0)
             source_path = _pending_input_source_path(store, pending_input)
-            relative_path, provided_as = _AUDIO_ARTIFACT_BINDINGS[artifact_id]
             artifact = store.import_file(
                 source_path,
-                kind=str(pending_input.get("kind") or "audio/wav"),
-                relative_path=relative_path,
-                artifact_id=artifact_id,
+                kind=spec.kind,
+                relative_path=spec.relative_path,
+                artifact_id=spec.artifact_id,
                 metadata={
                     "provided": True,
-                    "providedAs": provided_as,
+                    "providedAs": role,
                     "boundFromPendingInput": _pending_input_display_path(pending_input),
                     "sourcePath": str(pending_input.get("sourcePath", "")),
+                    **_auto_bind_metadata(pending_input),
                 },
             )
             manifest.register_artifact(artifact)
+            _append_auto_bind_warning(manifest, pending_input, spec.artifact_id)
             pending_input["status"] = "bound"
-            pending_input["artifactId"] = artifact_id
-            bound_inputs.append((pending_input, artifact_id))
+            pending_input["artifactId"] = spec.artifact_id
+            bound_inputs.append((pending_input, spec.artifact_id))
             changed = True
         if changed:
             manifest.metadata[_PENDING_INPUTS_METADATA_KEY] = _mark_pending_inputs_bound(manifest, bound_inputs)
+
+    def _register_manual_artifacts(self, manifest: ProjectManifest, store: LocalArtifactStore) -> None:
+        manual = manifest.metadata.get("manual")
+        if not isinstance(manual, dict):
+            return
+        if "artifact_manual_metadata_json" not in manifest.artifacts:
+            metadata_ref = self._write_manual_metadata_artifact(
+                store,
+                global_tempo=manual.get("globalTempo") if isinstance(manual.get("globalTempo"), int | float) else None,
+                meter=manual.get("meter") if isinstance(manual.get("meter"), dict) else None,
+                key=manual.get("key") if isinstance(manual.get("key"), dict) else None,
+            )
+            manifest.register_artifact(metadata_ref)
+        if manual.get("globalTempo") is not None and "artifact_tempo_timeline_json" not in manifest.artifacts:
+            tempo_ref = self._write_provided_tempo_artifact(
+                store,
+                global_tempo=float(manual["globalTempo"]) if isinstance(manual["globalTempo"], int | float) else None,
+            )
+            manifest.register_artifact(tempo_ref)
 
     def _manifest_path(self, project_id: str) -> Path:
         if not project_id:
@@ -784,24 +776,22 @@ class AutoscoreController:
         start_index = 0 if start_task_type is None else _task_type_sort_key(start_task_type)[0]
         while True:
             manifest = ProjectManifest.load(self._manifest_path(project_id))
+            self._register_pending_inputs_as_artifacts(manifest, LocalArtifactStore(manifest.project_dir))
+            manifest.save(self._manifest_path(project_id))
             ready_tasks = [
                 task
                 for task in self._task_readiness(manifest)
                 if task.ready
                 and _task_type_sort_key(task.task_type)[0] >= start_index
                 and task.task_type not in ran_task_types
-                and (force or task.status not in {"running", "succeeded"})
+                and _should_run_task(manifest, task.task_type, force=force)
             ]
             if not ready_tasks:
                 return results
-            selected = None
-            for task in ready_tasks:
-                if start_task_type is not None and not results and task.task_type == start_task_type:
-                    selected = task
-                    break
-                if start_task_type is None or results:
-                    selected = task
-                    break
+            if not results and start_task_type is not None:
+                selected = next((task for task in ready_tasks if task.task_type == start_task_type), None)
+            else:
+                selected = ready_tasks[0]
             if selected is None:
                 return results
             result = self.run_step(project_id, selected.task_type)
@@ -814,6 +804,24 @@ def project_id_from_name(name: str) -> str:
     if not project_id:
         raise ValueError("name does not contain a usable project id")
     return project_id
+
+
+def input_group_name_from_path(path: str | Path) -> str:
+    """Return the workspace grouping name for an initial inbox file."""
+
+    stem = Path(path).stem
+    normalized = stem.lower()
+    for suffix in (
+        "_vox",
+        "_vocal",
+        "_vocals",
+        "_instrument",
+        "_instruments",
+        "_accompaniment",
+    ):
+        if normalized.endswith(suffix):
+            return stem[: -len(suffix)]
+    return stem
 
 
 def _problem_to_message(problem: object) -> str:
@@ -838,17 +846,25 @@ def _node_id_from_execution_or_task(execution: dict[str, object], task_type: str
     node_id = execution.get("nodeId")
     if node_id:
         return str(node_id)
-    if task_type == "separateAudio":
-        return "audio-local"
-    if task_type in {"estimateTempo", "detectPhrases", "alignPhrase", "stitchPhrases"}:
-        return "timeline-local"
-    if task_type == "runGame":
-        return "midi-local"
-    if task_type == "runLyricFA":
-        return "lyric-local"
-    if task_type == "buildScoreJson":
-        return "score-export-local"
+    try:
+        return node_id_for_task(task_type)
+    except NotImplementedError:
+        pass
     return "local"
+
+
+def _should_run_task(manifest: ProjectManifest, task_type: str, *, force: bool) -> bool:
+    if force:
+        return True
+    if _task_outputs_exist(manifest, task_type):
+        return False
+    step = manifest.steps.get(task_type)
+    return step is None or step.status not in {"running", "succeeded"}
+
+
+def _task_outputs_exist(manifest: ProjectManifest, task_type: str) -> bool:
+    output_artifact_ids = output_artifact_ids_for_task(task_type)
+    return bool(output_artifact_ids) and all(artifact_id in manifest.artifacts for artifact_id in output_artifact_ids)
 
 
 def _pending_inputs(manifest: ProjectManifest) -> list[dict[str, object]]:
@@ -858,7 +874,7 @@ def _pending_inputs(manifest: ProjectManifest) -> list[dict[str, object]]:
     return [dict(item) for item in pending if isinstance(item, dict)]
 
 
-def _available_pending_audio_inputs(
+def _available_pending_inputs(
     manifest: ProjectManifest,
     audio_extensions: list[str],
     *,
@@ -871,6 +887,7 @@ def _available_pending_audio_inputs(
         if artifact.relative_path
     }
     audio_suffixes = {extension.lower() for extension in audio_extensions}
+    input_suffixes = {*audio_suffixes, ".txt"}
     pending_inputs = [
         item
         for item in _pending_inputs(manifest)
@@ -885,7 +902,7 @@ def _available_pending_audio_inputs(
             relative_path = f"inbox/{path.name}"
             if (
                 path.is_file()
-                and path.suffix.lower() in audio_suffixes
+                and path.suffix.lower() in input_suffixes
                 and relative_path not in artifact_relative_paths
                 and relative_path not in seen
             ):
@@ -893,13 +910,13 @@ def _available_pending_audio_inputs(
                     {
                         "relativePath": relative_path,
                         "sourcePath": str(path),
-                        "kind": _kind_for_audio_path(path),
+                        "kind": _kind_for_input_path(path),
                         "status": "pending",
                     }
                 )
-    global_inbox_inputs = _global_inbox_audio_inputs(
+    global_inbox_inputs = _global_inbox_inputs(
         manifest,
-        audio_suffixes=audio_suffixes,
+        input_suffixes=input_suffixes,
         import_dir=import_dir,
         seen_source_paths={
             str(item.get("sourcePath"))
@@ -911,10 +928,10 @@ def _available_pending_audio_inputs(
     return pending_inputs
 
 
-def _global_inbox_audio_inputs(
+def _global_inbox_inputs(
     manifest: ProjectManifest,
     *,
-    audio_suffixes: set[str],
+    input_suffixes: set[str],
     import_dir: str | None,
     seen_source_paths: set[str],
 ) -> list[dict[str, object]]:
@@ -927,7 +944,7 @@ def _global_inbox_audio_inputs(
         path
         for path in sorted(inbox_dir.iterdir())
         if path.is_file()
-        and path.suffix.lower() in audio_suffixes
+        and path.suffix.lower() in input_suffixes
         and str(path) not in seen_source_paths
     ]
     if not candidates:
@@ -935,18 +952,29 @@ def _global_inbox_audio_inputs(
     matching_project = [
         path
         for path in candidates
-        if project_id_from_name(path.stem).lower() == manifest.project_id.lower()
+        if project_id_from_name(input_group_name_from_path(path)).lower() == manifest.project_id.lower()
     ]
-    selected = matching_project or (candidates if len(candidates) == 1 else [])
-    return [
-        {
+    if matching_project:
+        selected = matching_project
+        auto_bind_reason = ""
+    elif len(candidates) == 1:
+        selected = candidates
+        auto_bind_reason = "single global inbox candidate"
+    else:
+        selected = []
+        auto_bind_reason = ""
+    inputs = []
+    for path in selected:
+        item = {
             "relativePath": "",
             "sourcePath": str(path),
-            "kind": _kind_for_audio_path(path),
+            "kind": _kind_for_input_path(path),
             "status": "pending",
         }
-        for path in selected
-    ]
+        if auto_bind_reason:
+            item["autoBindReason"] = auto_bind_reason
+        inputs.append(item)
+    return inputs
 
 
 def _mark_pending_inputs_bound(
@@ -971,7 +999,32 @@ def _mark_pending_inputs_bound(
             by_pending_key[key] = target
         target["status"] = "bound"
         target["artifactId"] = artifact_id
+        if bound_input.get("autoBindReason"):
+            target["autoBindReason"] = str(bound_input["autoBindReason"])
     return pending_inputs
+
+
+def _auto_bind_metadata(pending_input: dict[str, object]) -> dict[str, object]:
+    reason = pending_input.get("autoBindReason")
+    if not reason:
+        return {}
+    return {"autoBound": True, "autoBindReason": str(reason)}
+
+
+def _append_auto_bind_warning(
+    manifest: ProjectManifest,
+    pending_input: dict[str, object],
+    artifact_id: str,
+) -> None:
+    reason = pending_input.get("autoBindReason")
+    if not reason:
+        return
+    message = (
+        f"auto-bound {pending_input.get('sourcePath')} to {artifact_id} "
+        f"for project {manifest.project_id}: {reason}"
+    )
+    if message not in manifest.warnings:
+        manifest.warnings.append(message)
 
 
 def _pending_input_key(pending_input: dict[str, object]) -> str:
@@ -1004,6 +1057,41 @@ def _unique_project_inbox_path(store: LocalArtifactStore, filename: str) -> str:
         candidate = f"inbox/{stem}-{index}{suffix}"
         index += 1
     return candidate
+
+
+def _group_initial_input_files(
+    input_dir: Path,
+    *,
+    audio_extensions: list[str],
+) -> list[tuple[str, list[Path]]]:
+    input_suffixes = {extension.lower() for extension in audio_extensions}
+    input_suffixes.add(".txt")
+    grouped: dict[str, list[Path]] = {}
+    for path in sorted(input_dir.iterdir()):
+        if not path.is_file() or path.suffix.lower() not in input_suffixes:
+            continue
+        group_name = input_group_name_from_path(path)
+        grouped.setdefault(group_name, []).append(path)
+    return sorted(grouped.items(), key=lambda item: project_id_from_name(item[0]).lower())
+
+
+def _input_role_for_pending_input(pending_input: dict[str, object]) -> str:
+    display_path = _pending_input_display_path(pending_input).lower()
+    suffix = Path(display_path).suffix.lower()
+    if suffix == ".txt" or str(pending_input.get("kind")) == "text/plain":
+        return "lyrics"
+    name = Path(display_path).stem.lower()
+    if "vox" in name or "vocal" in name:
+        return "vocals"
+    if "instrument" in name or "accompaniment" in name:
+        return "accompaniment"
+    return "originalAudio"
+
+
+def _kind_for_input_path(path: Path) -> str:
+    if path.suffix.lower() == ".txt":
+        return "text/plain"
+    return _kind_for_audio_path(path)
 
 
 def _kind_for_audio_path(path: Path) -> str:

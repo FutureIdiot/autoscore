@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
-from autoscore.constants import SCHEMA_VERSION
+from autoscore.constants import TASK_ENVELOPE_SCHEMA_VERSION, TASK_REQUIREMENTS_SCHEMA_VERSION
 from autoscore.core.artifacts import ArtifactRef
 from autoscore.core.problems import ProblemRecord
 
@@ -18,6 +18,16 @@ TASK_RESULT_STATES = {
     "cancelled",
     "skipped",
 }
+
+TaskResultStatus = Literal[
+    "pending",
+    "ready",
+    "running",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "skipped",
+]
 
 
 @dataclass(slots=True)
@@ -67,13 +77,13 @@ class TaskRequirements:
     min_vram_gb: int | None = None
     required_backends: list[str] = field(default_factory=list)
     required_models: list[str] = field(default_factory=list)
-    schema_version: int = SCHEMA_VERSION
+    schema_version: int = TASK_REQUIREMENTS_SCHEMA_VERSION
     artifact_kinds: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.min_vram_gb is not None and self.min_vram_gb < 0:
             raise ValueError("min_vram_gb must be non-negative")
-        if self.schema_version != SCHEMA_VERSION:
+        if self.schema_version != TASK_REQUIREMENTS_SCHEMA_VERSION:
             raise ValueError(f"unsupported schema_version: {self.schema_version}")
 
     @classmethod
@@ -84,7 +94,7 @@ class TaskRequirements:
             min_vram_gb=data.get("minVramGb"),
             required_backends=list(data.get("requiredBackends", [])),
             required_models=list(data.get("requiredModels", [])),
-            schema_version=int(data.get("schemaVersion", SCHEMA_VERSION)),
+            schema_version=int(data.get("schemaVersion", TASK_REQUIREMENTS_SCHEMA_VERSION)),
             artifact_kinds=list(data.get("artifactKinds", [])),
         )
 
@@ -107,7 +117,7 @@ class TaskEnvelope:
     task_id: str
     project_id: str
     task_type: str
-    schema_version: int = SCHEMA_VERSION
+    schema_version: int = TASK_ENVELOPE_SCHEMA_VERSION
     input_artifacts: list[ArtifactRef] = field(default_factory=list)
     params: dict[str, Any] = field(default_factory=dict)
     requirements: TaskRequirements = field(default_factory=TaskRequirements)
@@ -121,7 +131,7 @@ class TaskEnvelope:
             raise ValueError("project_id is required")
         if not self.task_type:
             raise ValueError("task_type is required")
-        if self.schema_version != SCHEMA_VERSION:
+        if self.schema_version != TASK_ENVELOPE_SCHEMA_VERSION:
             raise ValueError(f"unsupported schema_version: {self.schema_version}")
 
     @classmethod
@@ -130,7 +140,7 @@ class TaskEnvelope:
             task_id=data["taskId"],
             project_id=data["projectId"],
             task_type=data["taskType"],
-            schema_version=int(data.get("schemaVersion", SCHEMA_VERSION)),
+            schema_version=int(data.get("schemaVersion", TASK_ENVELOPE_SCHEMA_VERSION)),
             input_artifacts=[ArtifactRef.from_dict(item) for item in data.get("inputArtifacts", [])],
             params=dict(data.get("params", {})),
             requirements=TaskRequirements.from_dict(data.get("requirements", {})),
@@ -159,7 +169,7 @@ class TaskResult:
     task_id: str
     project_id: str
     task_type: str
-    status: str
+    status: TaskResultStatus
     output_artifacts: list[ArtifactRef] = field(default_factory=list)
     warnings: list[ProblemRecord] = field(default_factory=list)
     errors: list[ProblemRecord] = field(default_factory=list)

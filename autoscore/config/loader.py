@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from autoscore.constants import SCHEMA_VERSION
+from autoscore.constants import PACKAGE_CONFIG_SCHEMA_VERSION
 
 
 @dataclass(slots=True)
@@ -47,7 +47,7 @@ class PackageConfig:
     node_id: str
     node_types: list[str]
     supported_tasks: list[str]
-    schema_versions: list[int] = field(default_factory=lambda: [SCHEMA_VERSION])
+    schema_versions: list[int] = field(default_factory=lambda: [PACKAGE_CONFIG_SCHEMA_VERSION])
     artifact_kinds: list[str] = field(default_factory=list)
     local_artifact_cache_dir: str | None = None
     runtime: dict[str, Any] = field(default_factory=dict)
@@ -66,8 +66,8 @@ class PackageConfig:
             raise ValueError("node_types are required")
         if not self.supported_tasks:
             raise ValueError("supported_tasks are required")
-        if SCHEMA_VERSION not in self.schema_versions:
-            raise ValueError(f"schema_versions must include current schema version {SCHEMA_VERSION}")
+        if PACKAGE_CONFIG_SCHEMA_VERSION not in self.schema_versions:
+            raise ValueError(f"schema_versions must include current schema version {PACKAGE_CONFIG_SCHEMA_VERSION}")
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PackageConfig":
@@ -77,7 +77,7 @@ class PackageConfig:
             node_id=data["nodeId"],
             node_types=list(data["nodeTypes"]),
             supported_tasks=list(data["supportedTasks"]),
-            schema_versions=[int(item) for item in data.get("schemaVersions", [SCHEMA_VERSION])],
+            schema_versions=[int(item) for item in data.get("schemaVersions", [PACKAGE_CONFIG_SCHEMA_VERSION])],
             artifact_kinds=list(data.get("artifactKinds", [])),
             local_artifact_cache_dir=data.get("localArtifactCacheDir"),
             runtime=dict(data.get("runtime", {})),

@@ -7,7 +7,7 @@ from autoscore.cli.main import main
 from autoscore.core.artifacts import ArtifactRef
 from autoscore.core.projects import ProjectManifest
 from autoscore.config import AppConfig
-from autoscore.runtime import AutoscoreController, NodeRegistration, ProjectAlreadyProcessedError, project_id_from_name
+from autoscore.runtime import AutoscoreController, NodeRegistration, project_id_from_name
 
 
 def _write_audio(path: Path) -> Path:
@@ -97,7 +97,7 @@ class AutoscoreControllerTests(unittest.TestCase):
         self.assertEqual(status.steps[1].execution_node_id, "audio-local")
         self.assertEqual(status.steps[2].execution_node_id, "timeline-local")
 
-    def test_create_project_imports_inputs_and_writes_manifest(self) -> None:
+    def test_create_project_copies_inputs_as_pending_without_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir) / "workspaces"
             source_audio = Path(temp_dir) / "song.wav"
@@ -114,15 +114,17 @@ class AutoscoreControllerTests(unittest.TestCase):
 
             project_dir = workspace / "demo"
             loaded = ProjectManifest.load(project_dir / "manifest.json")
-            copied_audio = (project_dir / "input" / "original_audio.wav").read_bytes()
-            copied_lyrics = (project_dir / "input" / "lyrics.txt").read_text(encoding="utf-8")
+            copied_audio = (project_dir / "inbox" / "song.wav").read_bytes()
+            copied_lyrics = (project_dir / "inbox" / "lyrics.txt").read_text(encoding="utf-8")
 
         self.assertEqual(manifest.project_id, "demo")
         self.assertEqual(loaded.metadata["manual"]["globalTempo"], 120)
         self.assertEqual(loaded.metadata["manual"]["meter"], {"numerator": 3, "denominator": 4})
-        self.assertIn("artifact_original_audio", loaded.artifacts)
-        self.assertIn("artifact_lyrics_txt", loaded.artifacts)
-        self.assertIn("artifact_manual_metadata_json", loaded.artifacts)
+        self.assertEqual(loaded.artifacts, {})
+        self.assertEqual(
+            [item["relativePath"] for item in loaded.metadata["pendingInputs"]],
+            ["inbox/song.wav", "inbox/lyrics.txt"],
+        )
         self.assertEqual(loaded.steps["createProject"].status, "succeeded")
         self.assertEqual(copied_audio, b"audio")
         self.assertEqual(copied_lyrics, "hello world")
@@ -192,6 +194,25 @@ class AutoscoreControllerTests(unittest.TestCase):
         self.assertEqual(manifest.steps["detectPhrases"].input_artifact_ids, ["artifact_vocals_wav"])
         self.assertEqual(copied_audio, b"vocals")
 
+    def test_pending_instrument_and_lyrics_register_by_filename_role(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            instrument = Path(temp_dir) / "song_instrument.wav"
+            lyrics = Path(temp_dir) / "song.txt"
+            instrument.write_bytes(b"band")
+            lyrics.write_text("lyrics", encoding="utf-8")
+            controller = AutoscoreController(workspace)
+            controller.create_project_from_pending_inputs(project_id="demo", input_paths=[instrument, lyrics])
+
+            with self.assertRaisesRegex(KeyError, "artifact_original_audio"):
+                controller.run_step("demo", "separateAudio")
+            manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
+
+        self.assertIn("artifact_accompaniment_wav", manifest.artifacts)
+        self.assertIn("artifact_lyrics_txt", manifest.artifacts)
+        self.assertEqual(manifest.artifacts["artifact_accompaniment_wav"].metadata["providedAs"], "accompaniment")
+        self.assertEqual(manifest.artifacts["artifact_lyrics_txt"].metadata["providedAs"], "lyrics")
+
     def test_run_step_discovers_unregistered_project_inbox_audio(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir) / "workspaces"
@@ -234,6 +255,32 @@ class AutoscoreControllerTests(unittest.TestCase):
         self.assertEqual(manifest.metadata["pendingInputs"][0]["sourcePath"], str(inbox_audio))
         self.assertEqual(manifest.metadata["pendingInputs"][0]["artifactId"], "artifact_vocals_wav")
         self.assertEqual(copied_audio, b"vocals")
+
+    def test_run_step_warns_when_single_global_inbox_file_auto_binds_to_different_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace = root / "workspaces"
+            global_inbox = root / "inbox"
+            project_dir = workspace / "empty_project"
+            global_inbox.mkdir(parents=True)
+            project_dir.mkdir(parents=True)
+            inbox_audio = global_inbox / "loose.wav"
+            inbox_audio.write_bytes(b"audio")
+            controller = AutoscoreController(
+                workspace,
+                app_config=AppConfig(import_dir=str(global_inbox)),
+            )
+            ProjectManifest(project_id="empty_project", project_dir=str(project_dir)).save(project_dir / "manifest.json")
+
+            result = controller.run_step("empty_project", "separateAudio")
+            manifest = ProjectManifest.load(project_dir / "manifest.json")
+
+        self.assertEqual(result.status, "succeeded")
+        artifact = manifest.artifacts["artifact_original_audio"]
+        self.assertTrue(artifact.metadata["autoBound"])
+        self.assertEqual(artifact.metadata["autoBindReason"], "single global inbox candidate")
+        self.assertEqual(manifest.metadata["pendingInputs"][0]["autoBindReason"], "single global inbox candidate")
+        self.assertTrue(any("auto-bound" in warning and str(inbox_audio) in warning for warning in manifest.warnings))
 
     def test_uses_configured_workspace_when_not_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -380,11 +427,11 @@ class AutoscoreControllerTests(unittest.TestCase):
             status = controller.get_project_status("demo")
             readiness = {task.task_type: task for task in status.task_readiness}
 
-        self.assertTrue(readiness["separateAudio"].ready)
-        self.assertTrue(readiness["estimateTempo"].ready)
+        self.assertFalse(readiness["separateAudio"].ready)
+        self.assertFalse(readiness["estimateTempo"].ready)
         self.assertFalse(readiness["detectPhrases"].ready)
+        self.assertEqual(readiness["separateAudio"].missing_input_artifact_ids, ["artifact_original_audio"])
         self.assertEqual(readiness["detectPhrases"].missing_input_artifact_ids, ["artifact_vocals_wav"])
-        self.assertEqual(readiness["detectPhrases"].missing_optional_artifact_ids, ["artifact_tempo_timeline_json"])
         self.assertEqual(readiness["detectPhrases"].node_id, "timeline-local")
 
     def test_estimate_tempo_runs_without_manual_metadata_with_warning(self) -> None:
@@ -485,7 +532,7 @@ class AutoscoreControllerTests(unittest.TestCase):
             results = controller.activate_ready_tasks("demo")
             manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
 
-        self.assertEqual([result.task_type for result in results], ["separateAudio", "estimateTempo", "detectPhrases"])
+        self.assertEqual([result.task_type for result in results], ["separateAudio", "detectPhrases"])
         self.assertEqual(manifest.steps["detectPhrases"].status, "succeeded")
         self.assertIn("artifact_phrase_timeline_json", manifest.artifacts)
 
@@ -504,7 +551,54 @@ class AutoscoreControllerTests(unittest.TestCase):
 
             results = controller.send_to_task("demo")
 
-        self.assertEqual([result.task_type for result in results], ["separateAudio", "estimateTempo", "detectPhrases"])
+        self.assertEqual([result.task_type for result in results], ["separateAudio", "detectPhrases"])
+
+    def test_send_to_task_skips_step_when_outputs_are_already_registered(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            original = Path(temp_dir) / "song.wav"
+            vocals = Path(temp_dir) / "song_vox.wav"
+            accompaniment = Path(temp_dir) / "song_instrument.wav"
+            lyrics = Path(temp_dir) / "song.txt"
+            original.write_bytes(b"original")
+            vocals.write_bytes(b"provided-vocals")
+            accompaniment.write_bytes(b"provided-band")
+            lyrics.write_text("line", encoding="utf-8")
+            controller = AutoscoreController(workspace)
+            controller.create_project_from_pending_inputs(
+                project_id="demo",
+                input_paths=[original, vocals, accompaniment, lyrics],
+            )
+            controller.update_manual_project_info("demo", global_tempo=120, meter=None)
+
+            results = controller.send_to_task("demo")
+            manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
+            copied_vocals = (workspace / "demo" / "audio" / "vocals.wav").read_bytes()
+
+        self.assertEqual([result.task_type for result in results], ["detectPhrases"])
+        self.assertNotIn("separateAudio", manifest.steps)
+        self.assertEqual(copied_vocals, b"provided-vocals")
+
+    def test_force_send_reruns_step_and_overwrites_existing_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            original = Path(temp_dir) / "song.wav"
+            vocals = Path(temp_dir) / "song_vox.wav"
+            accompaniment = Path(temp_dir) / "song_instrument.wav"
+            original.write_bytes(b"original")
+            vocals.write_bytes(b"provided-vocals")
+            accompaniment.write_bytes(b"provided-band")
+            controller = AutoscoreController(workspace)
+            controller.create_project_from_pending_inputs(
+                project_id="demo",
+                input_paths=[original, vocals, accompaniment],
+            )
+
+            results = controller.send_to_task("demo", task_type="separateAudio", force=True)
+            copied_vocals = (workspace / "demo" / "audio" / "vocals.wav").read_bytes()
+
+        self.assertEqual([result.task_type for result in results], ["separateAudio"])
+        self.assertEqual(copied_vocals, b"original")
 
     def test_send_to_task_runs_only_requested_task_without_continue(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -523,7 +617,7 @@ class AutoscoreControllerTests(unittest.TestCase):
             results = controller.send_to_task("demo", task_type="estimateTempo")
             manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
 
-        self.assertEqual([result.task_type for result in results], ["estimateTempo"])
+        self.assertEqual([result.task_type for result in results], [])
         self.assertNotIn("detectPhrases", manifest.steps)
 
     def test_send_to_task_can_force_rerun_from_requested_task_and_continue(self) -> None:
@@ -549,16 +643,19 @@ class AutoscoreControllerTests(unittest.TestCase):
 
         self.assertEqual([result.task_type for result in results], ["detectPhrases"])
 
-    def test_create_project_from_provided_vocals_can_run_detect_phrases_directly(self) -> None:
+    def test_pending_vox_input_can_run_detect_phrases_directly(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir) / "workspaces"
-            vocals = Path(temp_dir) / "vocals.wav"
+            vocals = Path(temp_dir) / "song_vox.wav"
             vocals.write_bytes(b"vocals")
             controller = AutoscoreController(workspace)
 
-            controller.create_project_from_provided_vocals(
+            controller.create_project_from_pending_inputs(
                 project_id="direct",
-                vocals_path=vocals,
+                input_paths=[vocals],
+            )
+            controller.update_manual_project_info(
+                "direct",
                 global_tempo=120,
                 meter={"numerator": 4, "denominator": 4},
             )
@@ -691,6 +788,7 @@ class AutoscoreControllerTests(unittest.TestCase):
             import_dir.mkdir()
             (import_dir / "Song A.wav").write_bytes(b"audio-a")
             (import_dir / "Song A.txt").write_text("lyrics a", encoding="utf-8")
+            (import_dir / "Song A_vox.wav").write_bytes(b"vocals-a")
             (import_dir / "Song B.flac").write_bytes(b"audio-b")
             controller = AutoscoreController(
                 root / "workspaces",
@@ -698,13 +796,18 @@ class AutoscoreControllerTests(unittest.TestCase):
             )
 
             results = controller.create_projects_from_import_dir()
-            status = controller.get_project_status("Song_A")
+            manifest = ProjectManifest.load(root / "workspaces" / "Song_A" / "manifest.json")
 
             self.assertEqual([result.status for result in results], ["created", "created"])
-            self.assertEqual(status.summary.project_id, "Song_A")
-            self.assertEqual(status.summary.artifact_count, 3)
+            self.assertEqual(manifest.project_id, "Song_A")
+            self.assertEqual(manifest.artifacts, {})
+            self.assertEqual(
+                sorted(item["relativePath"] for item in manifest.metadata["pendingInputs"]),
+                ["inbox/Song A.txt", "inbox/Song A.wav", "inbox/Song A_vox.wav"],
+            )
             self.assertFalse((import_dir / "Song A.wav").exists())
             self.assertFalse((import_dir / "Song A.txt").exists())
+            self.assertFalse((import_dir / "Song A_vox.wav").exists())
             self.assertFalse((import_dir / "Song B.flac").exists())
 
     def test_create_projects_from_import_dir_accepts_manual_tempo_and_meter(self) -> None:
@@ -727,7 +830,7 @@ class AutoscoreControllerTests(unittest.TestCase):
         self.assertEqual(manifest.metadata["manual"]["globalTempo"], 132)
         self.assertEqual(manifest.metadata["manual"]["meter"], {"numerator": 3, "denominator": 4})
 
-    def test_create_projects_from_import_dir_rejects_already_processed_project(self) -> None:
+    def test_create_projects_from_import_dir_skips_existing_project(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             import_dir = root / "imports"
@@ -741,8 +844,10 @@ class AutoscoreControllerTests(unittest.TestCase):
             controller.create_projects_from_import_dir()
             audio.write_bytes(b"audio")
 
-            with self.assertRaises(ProjectAlreadyProcessedError):
-                controller.create_projects_from_import_dir()
+            results = controller.create_projects_from_import_dir()
+
+        self.assertEqual(results[0].status, "skipped")
+        self.assertEqual(results[0].message, "project already exists")
 
     def test_create_projects_from_import_dir_force_overwrites_existing_project(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -759,7 +864,7 @@ class AutoscoreControllerTests(unittest.TestCase):
             audio.write_bytes(b"new-audio")
 
             results = controller.create_projects_from_import_dir(overwrite=True)
-            copied_audio = (root / "workspaces" / "song" / "input" / "original_audio.wav").read_bytes()
+            copied_audio = (root / "workspaces" / "song" / "inbox" / "song.wav").read_bytes()
 
         self.assertEqual(results[0].status, "created")
         self.assertEqual(copied_audio, b"new-audio")

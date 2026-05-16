@@ -22,6 +22,17 @@ class TaskInputSpec:
     optional: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class TaskSpec:
+    """Static local dispatch contract for one task type."""
+
+    runner: TaskRunner
+    input_artifacts: TaskInputSpec
+    output_artifacts: tuple[str, ...]
+    requirements: TaskRequirements
+    node_id: str
+
+
 def build_task_envelope(
     *,
     project_id: str,
@@ -36,18 +47,15 @@ def build_task_envelope(
         task_type=task_type,
         input_artifacts=input_artifacts,
         params={"backend": "mock"},
-        requirements=_requirements_for_task(task_type),
-        execution=ExecutionInfo(mode="local", transport="in_process", node_id=_node_id_for_task(task_type)),
+        requirements=requirements_for_task(task_type),
+        execution=ExecutionInfo(mode="local", transport="in_process", node_id=node_id_for_task(task_type)),
     )
 
 
 def get_local_runner(task_type: str) -> TaskRunner:
     """Return the local runner for a task type."""
 
-    try:
-        return _LOCAL_RUNNERS[task_type]
-    except KeyError as exc:
-        raise NotImplementedError(f"runner for task type {task_type!r} is not implemented") from exc
+    return task_spec_for_task(task_type).runner
 
 
 def input_artifact_ids_for_task(task_type: str) -> list[str]:
@@ -69,63 +77,83 @@ def optional_input_artifact_ids_for_task(task_type: str) -> list[str]:
     return list(input_artifact_spec_for_task(task_type).optional)
 
 
+def output_artifact_ids_for_task(task_type: str) -> list[str]:
+    """Return artifact ids a task is expected to produce."""
+
+    return list(task_spec_for_task(task_type).output_artifacts)
+
+
 def input_artifact_spec_for_task(task_type: str) -> TaskInputSpec:
     """Return the input artifact contract for a task."""
 
+    return task_spec_for_task(task_type).input_artifacts
+
+
+def requirements_for_task(task_type: str) -> TaskRequirements:
+    """Return a fresh scheduling requirements object for a task."""
+
+    return TaskRequirements.from_dict(task_spec_for_task(task_type).requirements.to_dict())
+
+
+def node_id_for_task(task_type: str) -> str:
+    """Return the default local node id for a task."""
+
+    return task_spec_for_task(task_type).node_id
+
+
+def task_spec_for_task(task_type: str) -> TaskSpec:
+    """Return the local dispatch spec for a task."""
+
     try:
-        return _INPUT_ARTIFACT_SPECS[task_type]
+        return _TASK_SPECS[task_type]
     except KeyError as exc:
-        raise NotImplementedError(f"runner for task type {task_type!r} is not implemented") from exc
+        raise NotImplementedError(f"task spec for task type {task_type!r} is not implemented") from exc
 
 
 def implemented_task_types() -> list[str]:
     """Return task types implemented by the local runner dispatch."""
 
-    return list(_LOCAL_RUNNERS)
+    return list(_TASK_SPECS)
 
 
-def _requirements_for_task(task_type: str) -> TaskRequirements:
-    if task_type == "separateAudio":
-        return TaskRequirements(node_types=["separator-node"], required_backends=["mock"], artifact_kinds=["audio/wav"])
-    if task_type == "estimateTempo":
-        return TaskRequirements(
+_TASK_SPECS = {
+    "separateAudio": TaskSpec(
+        runner=run_mock_separator,
+        input_artifacts=TaskInputSpec(required=("artifact_original_audio",)),
+        output_artifacts=("artifact_vocals_wav", "artifact_accompaniment_wav"),
+        requirements=TaskRequirements(
+            node_types=["separator-node"],
+            required_backends=["mock"],
+            artifact_kinds=["audio/wav"],
+        ),
+        node_id="audio-local",
+    ),
+    "estimateTempo": TaskSpec(
+        runner=run_mock_tempo_estimator,
+        input_artifacts=TaskInputSpec(
+            required=("artifact_original_audio",),
+            optional=("artifact_manual_metadata_json",),
+        ),
+        output_artifacts=("artifact_tempo_timeline_json",),
+        requirements=TaskRequirements(
             node_types=["tempo-node"],
             required_backends=["mock"],
             artifact_kinds=["audio/wav", "application/json"],
-        )
-    if task_type == "detectPhrases":
-        return TaskRequirements(
+        ),
+        node_id="timeline-local",
+    ),
+    "detectPhrases": TaskSpec(
+        runner=run_mock_phrase_detector,
+        input_artifacts=TaskInputSpec(
+            required=("artifact_vocals_wav",),
+            optional=("artifact_tempo_timeline_json", "artifact_lyrics_txt", "artifact_manual_metadata_json"),
+        ),
+        output_artifacts=("artifact_phrase_timeline_json",),
+        requirements=TaskRequirements(
             node_types=["phrase-node"],
             required_backends=["mock"],
             artifact_kinds=["audio/wav", "text/plain", "application/json"],
-        )
-    return TaskRequirements(required_backends=["mock"])
-
-
-def _node_id_for_task(task_type: str) -> str:
-    if task_type == "separateAudio":
-        return "audio-local"
-    if task_type == "estimateTempo":
-        return "timeline-local"
-    if task_type == "detectPhrases":
-        return "timeline-local"
-    return "local"
-
-
-_INPUT_ARTIFACT_SPECS = {
-    "separateAudio": TaskInputSpec(required=("artifact_original_audio",)),
-    "estimateTempo": TaskInputSpec(
-        required=("artifact_original_audio",),
-        optional=("artifact_manual_metadata_json",),
+        ),
+        node_id="timeline-local",
     ),
-    "detectPhrases": TaskInputSpec(
-        required=("artifact_vocals_wav",),
-        optional=("artifact_tempo_timeline_json", "artifact_lyrics_txt", "artifact_manual_metadata_json"),
-    ),
-}
-
-_LOCAL_RUNNERS: dict[str, TaskRunner] = {
-    "separateAudio": run_mock_separator,
-    "estimateTempo": run_mock_tempo_estimator,
-    "detectPhrases": run_mock_phrase_detector,
 }

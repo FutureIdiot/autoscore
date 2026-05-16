@@ -6,9 +6,9 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from autoscore.constants import SCHEMA_VERSION
+from autoscore.constants import PROJECT_MANIFEST_SCHEMA_VERSION
 from autoscore.core.artifacts import ArtifactRef
 from autoscore.core.projects.migrate import migrate_manifest_dict
 
@@ -22,6 +22,16 @@ TASK_STATES = {
     "skipped",
 }
 
+TaskStatus = Literal[
+    "pending",
+    "ready",
+    "running",
+    "succeeded",
+    "failed",
+    "cancelled",
+    "skipped",
+]
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -32,7 +42,7 @@ class ManifestStep:
     """Status record for one pipeline step or task type."""
 
     task_type: str
-    status: str = "pending"
+    status: TaskStatus = "pending"
     input_artifact_ids: list[str] = field(default_factory=list)
     output_artifact_ids: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -78,7 +88,7 @@ class ProjectManifest:
 
     project_id: str
     project_dir: str
-    schema_version: int = SCHEMA_VERSION
+    schema_version: int = PROJECT_MANIFEST_SCHEMA_VERSION
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
     artifacts: dict[str, ArtifactRef] = field(default_factory=dict)
@@ -92,10 +102,10 @@ class ProjectManifest:
             raise ValueError("project_id is required")
         if not self.project_dir:
             raise ValueError("project_dir is required")
-        if self.schema_version != SCHEMA_VERSION:
+        if self.schema_version != PROJECT_MANIFEST_SCHEMA_VERSION:
             warning = (
                 f"manifest schemaVersion {self.schema_version} differs from current "
-                f"{SCHEMA_VERSION}; migration should be handled before persistence"
+                f"{PROJECT_MANIFEST_SCHEMA_VERSION}; migration should be handled before persistence"
             )
             if warning not in self.warnings:
                 self.warnings.append(warning)
@@ -120,7 +130,7 @@ class ProjectManifest:
     def set_step_status(
         self,
         task_type: str,
-        status: str,
+        status: TaskStatus,
         *,
         input_artifact_ids: list[str] | None = None,
         output_artifact_ids: list[str] | None = None,
@@ -162,7 +172,7 @@ class ProjectManifest:
         return cls(
             project_id=migrated_data["projectId"],
             project_dir=resolved_project_dir,
-            schema_version=migrated_data.get("schemaVersion", SCHEMA_VERSION),
+            schema_version=migrated_data.get("schemaVersion", PROJECT_MANIFEST_SCHEMA_VERSION),
             created_at=migrated_data.get("createdAt", utc_now_iso()),
             updated_at=migrated_data.get("updatedAt", utc_now_iso()),
             artifacts=artifacts,
