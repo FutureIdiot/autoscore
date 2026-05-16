@@ -1,1 +1,1 @@
-"""Lyric timing deployment package."""
+"""Lyric import and analysis deployment package."""

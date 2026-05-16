@@ -68,12 +68,12 @@ def default_local_nodes() -> list[NodeRegistration]:
         NodeRegistration(
             node_id="lyric-local",
             package_id="lyric-package",
-            capabilities=("lyricfa-node",),
-            supported_tasks=("runLyricFA",),
+            capabilities=("lyric-analysis-node",),
+            supported_tasks=("analyzeLyrics",),
             transport="local",
-            endpoint="local://autoscore.packages.lyric.lyricfa",
+            endpoint="local://autoscore.packages.lyric.analyze",
             status="unconfigured",
-            metadata={"externalRuntime": "LyricFA"},
+            metadata={"externalTool": "user-provided lyric alignment"},
         ),
         NodeRegistration(
             node_id="score-export-local",

@@ -102,7 +102,7 @@ class PhraseAlignmentTests(unittest.TestCase):
             unaligned_global_end_ms=1500,
             global_start_ms=1000,
             global_end_ms=1400,
-            source="lyricfa",
+            source="lyrics",
         )
         first_note = AlignedFragment(
             fragment_id="note_001",
@@ -144,7 +144,7 @@ class PhraseAlignmentTests(unittest.TestCase):
             unaligned_global_end_ms=1200,
             global_start_ms=1000,
             global_end_ms=1100,
-            source="lyricfa",
+            source="lyrics",
         )
         note = AlignedFragment(
             fragment_id="note_001",
@@ -173,7 +173,7 @@ class PhraseAlignmentTests(unittest.TestCase):
             unaligned_global_end_ms=1200,
             global_start_ms=1000,
             global_end_ms=1100,
-            source="lyricfa",
+            source="lyrics",
         )
         note = AlignedFragment(
             fragment_id="note_001",

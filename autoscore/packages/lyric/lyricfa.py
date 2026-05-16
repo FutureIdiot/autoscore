@@ -1,1 +1,0 @@
-"""lyricfa-node implementation placeholder."""

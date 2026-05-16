@@ -6,7 +6,7 @@ inference outputs into a canonical score timeline and, later, `score.json`.
 This repository currently contains the project skeleton, runtime contracts,
 development controller/TUI shell, timeline foundation models, and a local mock
 pipeline through phrase detection. It does not yet run real audio separation,
-tempo estimation, MIDI analysis, LyricFA, or score export.
+tempo estimation, MIDI analysis, lyric analysis, or score export.
 
 ## Current Package Layout
 
@@ -26,7 +26,7 @@ autoscore/
     audio/           source separation boundary
     timeline/        tempo, phrase slicing, alignment, stitching
     midi/            MIDI import and analysis boundary
-    lyric/           LyricFA integration boundary
+    lyric/           lyric import and analysis boundary
     score_export/    future score JSON export boundary
 
   cli/
@@ -124,7 +124,7 @@ Current local development node registry:
 audio-local          separator-node
 timeline-local       tempo-node, phrase-node, alignment-node, stitch-node
 midi-local           midi-analysis-node unconfigured
-lyric-local          lyricfa-node    unconfigured
+lyric-local          lyric-analysis-node unconfigured
 score-export-local   score-json-node
 ```
 
@@ -150,8 +150,8 @@ communicate with.
 - TUI project info view/edit for manual tempo and meter.
 - Empty project creation, pending input registration, provided artifact
   attachment, and provided tempo timeline support.
-- Mock `separateAudio`, `estimateTempo`, `detectPhrases`, and `analyzeMidi`
-  runners wired through controller/TUI send execution.
+- Mock `separateAudio`, `estimateTempo`, `detectPhrases`, `analyzeMidi`, and
+  `analyzeLyrics` runners wired through controller/TUI send execution.
 - Timeline foundation models:
   - tempo ms/tick conversion;
   - phrase slice metadata and mock phrase timeline output;
@@ -163,23 +163,25 @@ communicate with.
 ## Not Implemented Yet
 
 - DAG scheduler and rerun/resume behavior.
-- Mock runners beyond `separateAudio`, `estimateTempo`, `detectPhrases`, and
-  `analyzeMidi`.
+- Mock runners beyond `separateAudio`, `estimateTempo`, `detectPhrases`,
+  `analyzeMidi`, and `analyzeLyrics`.
 - Real separator backend.
 - Real tempo/phrase audio analysis.
-- MIDI import and analysis node.
-- Real or mocked LyricFA adapter.
+- Real MIDI event parsing.
+- Real lyric forced alignment import/analysis.
 - Score schema models and score JSON export.
 - WebUI.
 
 ## Next Steps
 
-1. Add mock outputs for `runLyricFA`, `alignPhrase`, `stitchPhrases`, and
+1. Add mock outputs for `alignPhrase`, `stitchPhrases`, and
    `buildScoreJson`.
-2. Build an end-to-end mock pipeline before integrating MIDI analysis, LyricFA, or
-   heavy audio dependencies.
+2. Build an end-to-end mock pipeline before integrating real MIDI parsing,
+   lyric forced alignment, or heavy audio dependencies.
 3. Add clearer rerun/resume behavior once more downstream steps exist.
 
 GAME is a recommended external MIDI generation tool for users who want that
 workflow, but the Autoscore core package treats generated MIDI as user-provided
 input so packaged builds do not depend on GAME or inherit its project boundary.
+LyricFA can be used the same way for external lyric alignment, while the core
+package keeps only a neutral lyric analysis/import boundary.

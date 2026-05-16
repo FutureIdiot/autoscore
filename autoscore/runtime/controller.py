@@ -30,7 +30,7 @@ _PIPELINE_TASK_ORDER = (
     "estimateTempo",
     "detectPhrases",
     "analyzeMidi",
-    "runLyricFA",
+    "analyzeLyrics",
     "alignPhrase",
     "stitchPhrases",
     "buildScoreJson",

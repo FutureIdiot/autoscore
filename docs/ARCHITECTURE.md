@@ -22,7 +22,7 @@ autoscore/
     audio/           source separation boundary
     timeline/        tempo, phrase slicing, alignment, stitching
     midi/            MIDI import and analysis boundary
-    lyric/           LyricFA integration boundary
+    lyric/           lyric import and analysis boundary
     score_export/    future canonical score JSON export
 
   cli/
@@ -59,7 +59,7 @@ midi-package
   midi-analysis-node
 
 lyric-package
-  lyricfa-node
+  lyric-analysis-node
 
 score-export-package
   score-json-node
@@ -155,7 +155,7 @@ the controller knows about, even when no task is running:
 audio-local          separator-node
 timeline-local       tempo-node, phrase-node, alignment-node, stitch-node
 midi-local           midi-analysis-node unconfigured
-lyric-local          lyricfa-node    unconfigured
+lyric-local          lyric-analysis-node unconfigured
 score-export-local   score-json-node
 ```
 
@@ -181,6 +181,14 @@ GAME, a DAW, or another MIDI extraction tool, then provide the resulting MIDI to
 the pipeline for import and analysis. This keeps packaged Autoscore builds free
 from GAME runtime and licensing constraints while still allowing GAME-centered
 local workflows.
+
+## External Lyric Alignment
+
+Autoscore core treats lyric forced alignment the same way. Users may run
+LyricFA or another alignment tool outside the core package, then provide lyric
+timing data for import and analysis. The default package boundary remains a
+neutral lyric analysis node so packaged builds do not inherit external tool
+runtime or licensing constraints.
 
 It does not yet perform real audio analysis. Librosa or Essentia should be added
 later behind this package boundary.

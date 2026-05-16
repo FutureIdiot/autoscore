@@ -27,6 +27,9 @@ class AutoscoreControllerTests(unittest.TestCase):
         midi_node = next(node for node in nodes if node.node_id == "midi-local")
         self.assertEqual(midi_node.capabilities, ("midi-analysis-node",))
         self.assertEqual(midi_node.supported_tasks, ("analyzeMidi",))
+        lyric_node = next(node for node in nodes if node.node_id == "lyric-local")
+        self.assertEqual(lyric_node.capabilities, ("lyric-analysis-node",))
+        self.assertEqual(lyric_node.supported_tasks, ("analyzeLyrics",))
 
     def test_accepts_explicit_node_registry(self) -> None:
         controller = AutoscoreController(
@@ -535,8 +538,9 @@ class AutoscoreControllerTests(unittest.TestCase):
             results = controller.activate_ready_tasks("demo")
             manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
 
-        self.assertEqual([result.task_type for result in results], ["separateAudio", "detectPhrases"])
+        self.assertEqual([result.task_type for result in results], ["separateAudio", "detectPhrases", "analyzeLyrics"])
         self.assertEqual(manifest.steps["detectPhrases"].status, "succeeded")
+        self.assertEqual(manifest.steps["analyzeLyrics"].status, "succeeded")
         self.assertIn("artifact_phrase_timeline_json", manifest.artifacts)
 
     def test_send_to_task_without_task_runs_ready_pipeline_chain(self) -> None:
@@ -554,7 +558,7 @@ class AutoscoreControllerTests(unittest.TestCase):
 
             results = controller.send_to_task("demo")
 
-        self.assertEqual([result.task_type for result in results], ["separateAudio", "detectPhrases"])
+        self.assertEqual([result.task_type for result in results], ["separateAudio", "detectPhrases", "analyzeLyrics"])
 
     def test_send_to_task_skips_step_when_outputs_are_already_registered(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -578,7 +582,7 @@ class AutoscoreControllerTests(unittest.TestCase):
             manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
             copied_vocals = (workspace / "demo" / "audio" / "vocals.wav").read_bytes()
 
-        self.assertEqual([result.task_type for result in results], ["detectPhrases"])
+        self.assertEqual([result.task_type for result in results], ["detectPhrases", "analyzeLyrics"])
         self.assertNotIn("separateAudio", manifest.steps)
         self.assertEqual(copied_vocals, b"provided-vocals")
 
@@ -644,7 +648,7 @@ class AutoscoreControllerTests(unittest.TestCase):
                 force=True,
             )
 
-        self.assertEqual([result.task_type for result in results], ["detectPhrases"])
+        self.assertEqual([result.task_type for result in results], ["detectPhrases", "analyzeLyrics"])
 
     def test_pending_vox_input_can_run_detect_phrases_directly(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -701,6 +705,33 @@ class AutoscoreControllerTests(unittest.TestCase):
         self.assertEqual(note_data["notes"][0]["phraseId"], "phrase_001")
         self.assertEqual(note_data["notes"][0]["source"], "midi")
         self.assertEqual(note_data["notes"][0]["pitch"], 60)
+
+    def test_analyze_lyrics_writes_mock_lyric_fragments_from_phrase_timeline(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            controller = AutoscoreController(workspace)
+            controller.create_project(
+                project_id="demo",
+                audio_path=source_audio,
+                lyrics_text="first line\nsecond line\n",
+                global_tempo=120,
+                meter={"numerator": 4, "denominator": 4},
+            )
+            controller.run_step("demo", "separateAudio")
+            controller.run_step("demo", "detectPhrases")
+
+            result = controller.run_step("demo", "analyzeLyrics")
+            manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
+            lyric_data = json.loads((workspace / "demo" / "lyrics" / "fragments.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertIn("artifact_lyric_fragments_json", manifest.artifacts)
+        self.assertEqual(lyric_data["source"], "mock-lyric-analysis")
+        self.assertEqual(lyric_data["lyrics"][0]["phraseId"], "phrase_001")
+        self.assertEqual(lyric_data["lyrics"][0]["source"], "lyrics")
+        self.assertEqual(lyric_data["lyrics"][0]["text"], "first line")
 
     def test_attach_artifact_allows_downstream_steps_to_use_provided_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
