@@ -29,13 +29,14 @@ _PIPELINE_TASK_ORDER = (
     "separateAudio",
     "estimateTempo",
     "detectPhrases",
-    "runGame",
+    "analyzeMidi",
     "runLyricFA",
     "alignPhrase",
     "stitchPhrases",
     "buildScoreJson",
 )
 _PENDING_INPUTS_METADATA_KEY = "pendingInputs"
+_MIDI_INPUT_EXTENSIONS = {".mid", ".midi"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +68,11 @@ _INPUT_ARTIFACT_SPECS = {
         artifact_id="artifact_lyrics_txt",
         kind="text/plain",
         relative_path="input/lyrics.txt",
+    ),
+    "melodyMidi": InputArtifactSpec(
+        artifact_id="artifact_melody_midi",
+        kind="audio/midi",
+        relative_path="input/melody.mid",
     ),
 }
 
@@ -887,7 +893,7 @@ def _available_pending_inputs(
         if artifact.relative_path
     }
     audio_suffixes = {extension.lower() for extension in audio_extensions}
-    input_suffixes = {*audio_suffixes, ".txt"}
+    input_suffixes = {*audio_suffixes, *_MIDI_INPUT_EXTENSIONS, ".txt"}
     pending_inputs = [
         item
         for item in _pending_inputs(manifest)
@@ -1065,6 +1071,7 @@ def _group_initial_input_files(
     audio_extensions: list[str],
 ) -> list[tuple[str, list[Path]]]:
     input_suffixes = {extension.lower() for extension in audio_extensions}
+    input_suffixes.update(_MIDI_INPUT_EXTENSIONS)
     input_suffixes.add(".txt")
     grouped: dict[str, list[Path]] = {}
     for path in sorted(input_dir.iterdir()):
@@ -1078,6 +1085,8 @@ def _group_initial_input_files(
 def _input_role_for_pending_input(pending_input: dict[str, object]) -> str:
     display_path = _pending_input_display_path(pending_input).lower()
     suffix = Path(display_path).suffix.lower()
+    if suffix in _MIDI_INPUT_EXTENSIONS or str(pending_input.get("kind")) == "audio/midi":
+        return "melodyMidi"
     if suffix == ".txt" or str(pending_input.get("kind")) == "text/plain":
         return "lyrics"
     name = Path(display_path).stem.lower()
@@ -1089,6 +1098,8 @@ def _input_role_for_pending_input(pending_input: dict[str, object]) -> str:
 
 
 def _kind_for_input_path(path: Path) -> str:
+    if path.suffix.lower() in _MIDI_INPUT_EXTENSIONS:
+        return "audio/midi"
     if path.suffix.lower() == ".txt":
         return "text/plain"
     return _kind_for_audio_path(path)

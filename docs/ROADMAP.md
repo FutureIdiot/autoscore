@@ -21,8 +21,8 @@ older private implementation lists that may exist locally under
 - TUI project info view/edit for manual tempo and meter.
 - Empty project creation, pending input registration, provided artifact
   attachment, and provided tempo timeline support.
-- Mock `separateAudio`, `estimateTempo`, and `detectPhrases` runners wired
-  through controller/TUI send execution.
+- Mock `separateAudio`, `estimateTempo`, `detectPhrases`, and `analyzeMidi`
+  runners wired through controller/TUI send execution.
 - Timeline foundation models and tests.
 
 ## Current Development State
@@ -41,7 +41,7 @@ older private implementation lists that may exist locally under
 - Before a task runs, pending inputs are registered as artifacts from filename
   purpose:
 
-  ```text
+   ```text
   *vox* or *vocal*                 -> artifact_vocals_wav
   *instrument* or *accompaniment*  -> artifact_accompaniment_wav
   *.txt                            -> artifact_lyrics_txt
@@ -63,8 +63,7 @@ older private implementation lists that may exist locally under
 
    Add local/mock runners for the remaining major task types:
 
-   ```text
-   runGame
+  ```text
    runLyricFA
    alignPhrase
    stitchPhrases
@@ -73,8 +72,8 @@ older private implementation lists that may exist locally under
 
 2. End-to-End Mock Pipeline
 
-   Run a full project through mock separator, mock timeline, mock GAME, mock
-   LyricFA, alignment, stitching, and placeholder score export.
+   Run a full project through mock separator, mock timeline, mock MIDI
+   analysis, mock LyricFA, alignment, stitching, and placeholder score export.
 
 3. Rerun and Resume Behavior
 
@@ -94,9 +93,9 @@ older private implementation lists that may exist locally under
 
 6. External Integrations
 
-   Integrate GAME and LyricFA behind their package boundaries. Keep their local
-   Python paths and model paths in package config or provenance, not in project
-   manifests.
+   Integrate LyricFA behind its package boundary. Treat MIDI generation as an
+   external user/tool step; GAME can be recommended for that step without
+   becoming a default Autoscore package dependency.
 
 7. Node Registry Serialization
 

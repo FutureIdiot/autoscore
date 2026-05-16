@@ -21,7 +21,7 @@ autoscore/
   packages/
     audio/           source separation boundary
     timeline/        tempo, phrase slicing, alignment, stitching
-    midi/            GAME integration boundary
+    midi/            MIDI import and analysis boundary
     lyric/           LyricFA integration boundary
     score_export/    future canonical score JSON export
 
@@ -56,7 +56,7 @@ timeline-package
   stitch-node
 
 midi-package
-  game-node
+  midi-analysis-node
 
 lyric-package
   lyricfa-node
@@ -154,7 +154,7 @@ the controller knows about, even when no task is running:
 ```text
 audio-local          separator-node
 timeline-local       tempo-node, phrase-node, alignment-node, stitch-node
-midi-local           game-node       unconfigured
+midi-local           midi-analysis-node unconfigured
 lyric-local          lyricfa-node    unconfigured
 score-export-local   score-json-node
 ```
@@ -173,6 +173,14 @@ The timeline package currently contains dependency-free timeline primitives:
 - aligned note/lyric fragments;
 - lyric-to-note matching;
 - stitched song-level timeline fragments.
+
+## External MIDI Generation
+
+Autoscore core treats MIDI generation as an external tool step. Users may use
+GAME, a DAW, or another MIDI extraction tool, then provide the resulting MIDI to
+the pipeline for import and analysis. This keeps packaged Autoscore builds free
+from GAME runtime and licensing constraints while still allowing GAME-centered
+local workflows.
 
 It does not yet perform real audio analysis. Librosa or Essentia should be added
 later behind this package boundary.

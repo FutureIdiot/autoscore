@@ -63,7 +63,7 @@ class ProjectManifestTests(unittest.TestCase):
         manifest = ProjectManifest(project_id="project_001", project_dir="workspaces/project_001")
 
         with self.assertRaises(ValueError):
-            manifest.set_step_status("runGame", "done")
+            manifest.set_step_status("analyzeMidi", "done")
 
     def test_rejects_camel_case_step_update_arguments(self) -> None:
         manifest = ProjectManifest(project_id="project_001", project_dir="workspaces/project_001")

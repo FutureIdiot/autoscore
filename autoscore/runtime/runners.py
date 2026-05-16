@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from autoscore.core.artifacts import ArtifactRef, LocalArtifactStore
 from autoscore.packages.audio.separator import run_mock_separator
+from autoscore.packages.midi.analyze import run_mock_midi_analyzer
 from autoscore.packages.timeline.phrases import run_mock_phrase_detector
 from autoscore.packages.timeline.tempo import run_mock_tempo_estimator
 from autoscore.runtime.tasks import ExecutionInfo, TaskEnvelope, TaskRequirements, TaskResult
@@ -155,5 +156,18 @@ _TASK_SPECS = {
             artifact_kinds=["audio/wav", "text/plain", "application/json"],
         ),
         node_id="timeline-local",
+    ),
+    "analyzeMidi": TaskSpec(
+        runner=run_mock_midi_analyzer,
+        input_artifacts=TaskInputSpec(
+            required=("artifact_melody_midi", "artifact_phrase_timeline_json"),
+        ),
+        output_artifacts=("artifact_midi_notes_json",),
+        requirements=TaskRequirements(
+            node_types=["midi-analysis-node"],
+            required_backends=["mock"],
+            artifact_kinds=["audio/midi", "application/json"],
+        ),
+        node_id="midi-local",
     ),
 }

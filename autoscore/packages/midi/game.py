@@ -1,1 +1,0 @@
-"""game-node implementation placeholder."""

@@ -58,12 +58,12 @@ def default_local_nodes() -> list[NodeRegistration]:
         NodeRegistration(
             node_id="midi-local",
             package_id="midi-package",
-            capabilities=("game-node",),
-            supported_tasks=("smokeTestGame", "runGame"),
+            capabilities=("midi-analysis-node",),
+            supported_tasks=("analyzeMidi",),
             transport="local",
-            endpoint="local://autoscore.packages.midi.game",
+            endpoint="local://autoscore.packages.midi.analyze",
             status="unconfigured",
-            metadata={"externalRuntime": "GAME"},
+            metadata={"externalTool": "user-provided MIDI"},
         ),
         NodeRegistration(
             node_id="lyric-local",

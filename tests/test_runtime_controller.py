@@ -24,6 +24,9 @@ class AutoscoreControllerTests(unittest.TestCase):
         self.assertIn("tempo-node", timeline_node.capabilities)
         self.assertIn("stitchPhrases", timeline_node.supported_tasks)
         self.assertEqual(timeline_node.transport, "local")
+        midi_node = next(node for node in nodes if node.node_id == "midi-local")
+        self.assertEqual(midi_node.capabilities, ("midi-analysis-node",))
+        self.assertEqual(midi_node.supported_tasks, ("analyzeMidi",))
 
     def test_accepts_explicit_node_registry(self) -> None:
         controller = AutoscoreController(
@@ -668,6 +671,36 @@ class AutoscoreControllerTests(unittest.TestCase):
         self.assertIn("artifact_tempo_timeline_json", manifest.artifacts)
         self.assertEqual(manifest.artifacts["artifact_vocals_wav"].metadata["providedAs"], "vocals")
         self.assertEqual(phrase_data["phrases"][0]["audioArtifact"]["artifactId"], "artifact_phrase_001_vocals_wav")
+
+    def test_analyze_midi_writes_mock_note_fragments_from_phrase_timeline(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_midi = Path(temp_dir) / "song.mid"
+            source_audio.write_bytes(b"audio")
+            source_midi.write_bytes(b"MThd")
+            controller = AutoscoreController(workspace)
+            controller.create_project_from_pending_inputs(
+                project_id="demo",
+                input_paths=[source_audio, source_midi],
+            )
+            controller.update_manual_project_info("demo", global_tempo=120, meter={"numerator": 4, "denominator": 4})
+            controller.run_step("demo", "separateAudio")
+            controller.run_step("demo", "detectPhrases")
+
+            result = controller.run_step("demo", "analyzeMidi")
+            manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
+            note_data = json.loads((workspace / "demo" / "midi" / "notes.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result.status, "succeeded")
+        self.assertIn("artifact_melody_midi", manifest.artifacts)
+        self.assertIn("artifact_midi_notes_json", manifest.artifacts)
+        self.assertEqual(manifest.artifacts["artifact_melody_midi"].metadata["providedAs"], "melodyMidi")
+        self.assertEqual(note_data["source"], "mock-midi-analysis")
+        self.assertEqual(note_data["midiArtifact"]["artifactId"], "artifact_melody_midi")
+        self.assertEqual(note_data["notes"][0]["phraseId"], "phrase_001")
+        self.assertEqual(note_data["notes"][0]["source"], "midi")
+        self.assertEqual(note_data["notes"][0]["pitch"], 60)
 
     def test_attach_artifact_allows_downstream_steps_to_use_provided_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

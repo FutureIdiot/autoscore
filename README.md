@@ -6,7 +6,7 @@ inference outputs into a canonical score timeline and, later, `score.json`.
 This repository currently contains the project skeleton, runtime contracts,
 development controller/TUI shell, timeline foundation models, and a local mock
 pipeline through phrase detection. It does not yet run real audio separation,
-tempo estimation, GAME inference, LyricFA, or score export.
+tempo estimation, MIDI analysis, LyricFA, or score export.
 
 ## Current Package Layout
 
@@ -25,7 +25,7 @@ autoscore/
   packages/
     audio/           source separation boundary
     timeline/        tempo, phrase slicing, alignment, stitching
-    midi/            GAME integration boundary
+    midi/            MIDI import and analysis boundary
     lyric/           LyricFA integration boundary
     score_export/    future score JSON export boundary
 
@@ -74,6 +74,7 @@ Initial files are grouped into workspaces by filename prefix:
 
 ```text
 songname.wav          original/full audio candidate
+songname.mid/.midi    melody MIDI candidate
 songname.txt          lyrics candidate
 songname_vox.wav      vocals candidate
 songname_instrument.wav accompaniment candidate
@@ -100,7 +101,7 @@ task runs, pending files are registered as artifacts by filename purpose:
 names containing `vox` or `vocal` become `artifact_vocals_wav`, names
 containing `instrument` or `accompaniment` become `artifact_accompaniment_wav`,
 plain audio becomes `artifact_original_audio`, and `.txt` becomes
-`artifact_lyrics_txt`.
+`artifact_lyrics_txt`. MIDI files become `artifact_melody_midi`.
 
 Task readiness is based on required artifacts only; optional context such as
 lyrics, manual metadata, or tempo may be absent and should surface as task
@@ -122,7 +123,7 @@ Current local development node registry:
 ```text
 audio-local          separator-node
 timeline-local       tempo-node, phrase-node, alignment-node, stitch-node
-midi-local           game-node       unconfigured
+midi-local           midi-analysis-node unconfigured
 lyric-local          lyricfa-node    unconfigured
 score-export-local   score-json-node
 ```
@@ -149,8 +150,8 @@ communicate with.
 - TUI project info view/edit for manual tempo and meter.
 - Empty project creation, pending input registration, provided artifact
   attachment, and provided tempo timeline support.
-- Mock `separateAudio`, `estimateTempo`, and `detectPhrases` runners wired
-  through controller/TUI send execution.
+- Mock `separateAudio`, `estimateTempo`, `detectPhrases`, and `analyzeMidi`
+  runners wired through controller/TUI send execution.
 - Timeline foundation models:
   - tempo ms/tick conversion;
   - phrase slice metadata and mock phrase timeline output;
@@ -162,18 +163,23 @@ communicate with.
 ## Not Implemented Yet
 
 - DAG scheduler and rerun/resume behavior.
-- Mock runners beyond `separateAudio`, `estimateTempo`, and `detectPhrases`.
+- Mock runners beyond `separateAudio`, `estimateTempo`, `detectPhrases`, and
+  `analyzeMidi`.
 - Real separator backend.
 - Real tempo/phrase audio analysis.
-- Real GAME adapter.
+- MIDI import and analysis node.
 - Real or mocked LyricFA adapter.
 - Score schema models and score JSON export.
 - WebUI.
 
 ## Next Steps
 
-1. Add mock outputs for `runGame`, `runLyricFA`, `alignPhrase`,
-   `stitchPhrases`, and `buildScoreJson`.
-2. Build an end-to-end mock pipeline before integrating GAME, LyricFA, or
+1. Add mock outputs for `runLyricFA`, `alignPhrase`, `stitchPhrases`, and
+   `buildScoreJson`.
+2. Build an end-to-end mock pipeline before integrating MIDI analysis, LyricFA, or
    heavy audio dependencies.
 3. Add clearer rerun/resume behavior once more downstream steps exist.
+
+GAME is a recommended external MIDI generation tool for users who want that
+workflow, but the Autoscore core package treats generated MIDI as user-provided
+input so packaged builds do not depend on GAME or inherit its project boundary.

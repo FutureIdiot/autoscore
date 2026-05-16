@@ -1,1 +1,1 @@
-"""MIDI inference deployment package."""
+"""MIDI import and analysis deployment package."""

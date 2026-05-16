@@ -83,7 +83,7 @@ class PhraseAlignmentTests(unittest.TestCase):
             local_end_ms=567,
             unaligned_global_start_ms=1034,
             unaligned_global_end_ms=1367,
-            source="game",
+            source="midi",
         )
 
         aligned = align_fragments([fragment], PhraseAlignment(target_anchor_ms=1000, detected_anchor_ms=1034))
@@ -113,7 +113,7 @@ class PhraseAlignmentTests(unittest.TestCase):
             unaligned_global_end_ms=1250,
             global_start_ms=1000,
             global_end_ms=1150,
-            source="game",
+            source="midi",
         )
         second_note = AlignedFragment(
             fragment_id="note_002",
@@ -124,7 +124,7 @@ class PhraseAlignmentTests(unittest.TestCase):
             unaligned_global_end_ms=1520,
             global_start_ms=1160,
             global_end_ms=1420,
-            source="game",
+            source="midi",
         )
 
         alignments = match_lyrics_to_notes([lyric], [second_note, first_note])
@@ -155,7 +155,7 @@ class PhraseAlignmentTests(unittest.TestCase):
             unaligned_global_end_ms=1350,
             global_start_ms=1150,
             global_end_ms=1250,
-            source="game",
+            source="midi",
         )
 
         alignments = match_lyrics_to_notes([lyric], [note], max_nearest_distance_ms=200)
@@ -184,7 +184,7 @@ class PhraseAlignmentTests(unittest.TestCase):
             unaligned_global_end_ms=1900,
             global_start_ms=1800,
             global_end_ms=1900,
-            source="game",
+            source="midi",
         )
 
         self.assertEqual(match_lyrics_to_notes([lyric], [note], max_nearest_distance_ms=100), [])
@@ -222,7 +222,7 @@ class StitchTimelineTests(unittest.TestCase):
             unaligned_global_end_ms=1400,
             global_start_ms=1166,
             global_end_ms=1366,
-            source="game",
+            source="midi",
         )
         earlier = AlignedFragment(
             fragment_id="note_001",
@@ -233,7 +233,7 @@ class StitchTimelineTests(unittest.TestCase):
             unaligned_global_end_ms=1100,
             global_start_ms=966,
             global_end_ms=1066,
-            source="game",
+            source="midi",
         )
 
         timeline = stitch_fragments([phrase], notes=[later, earlier])
@@ -259,7 +259,7 @@ class StitchTimelineTests(unittest.TestCase):
             unaligned_global_end_ms=1100,
             global_start_ms=966,
             global_end_ms=1066,
-            source="game",
+            source="midi",
         )
 
         timeline = stitch_fragments([phrase], notes=[fragment])

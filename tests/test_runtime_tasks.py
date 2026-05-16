@@ -58,7 +58,7 @@ class RuntimeTaskTests(unittest.TestCase):
             TaskResult(
                 task_id="task_001",
                 project_id="project_001",
-                task_type="runGame",
+                task_type="analyzeMidi",
                 status="failed",
             )
 
