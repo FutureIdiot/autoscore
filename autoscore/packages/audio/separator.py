@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import shutil
+from typing import Protocol
 
-from autoscore.core.artifacts import LocalArtifactStore
-from autoscore.runtime.tasks import ExecutionInfo, TaskEnvelope, TaskResult
+from autoscore.core.artifacts import ArtifactRef, LocalArtifactStore
+from autoscore.core.tasks import ExecutionInfo, TaskResult
 
 
-def run_mock_separator(envelope: TaskEnvelope, store: LocalArtifactStore) -> TaskResult:
+class SeparatorTaskEnvelope(Protocol):
+    task_id: str
+    project_id: str
+    task_type: str
+    input_artifact_index: dict[str, ArtifactRef]
+
+
+def run_mock_separator(envelope: SeparatorTaskEnvelope, store: LocalArtifactStore) -> TaskResult:
     """Create deterministic mock stem artifacts from the original audio input."""
 
     original = _find_input_artifact(envelope, "artifact_original_audio")
@@ -41,7 +49,7 @@ def run_mock_separator(envelope: TaskEnvelope, store: LocalArtifactStore) -> Tas
     )
 
 
-def _find_input_artifact(envelope: TaskEnvelope, artifact_id: str):
+def _find_input_artifact(envelope: SeparatorTaskEnvelope, artifact_id: str):
     artifact = envelope.input_artifact_index.get(artifact_id)
     if artifact is not None:
         return artifact

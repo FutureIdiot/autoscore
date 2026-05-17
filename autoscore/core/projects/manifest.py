@@ -63,8 +63,8 @@ class ManifestStep:
             status=data.get("status", "pending"),
             input_artifact_ids=list(data.get("inputArtifactIds", [])),
             output_artifact_ids=list(data.get("outputArtifactIds", [])),
-            warnings=list(data.get("warnings", [])),
-            errors=list(data.get("errors", [])),
+            warnings=list(data.get("warnings") or []),
+            errors=list(data.get("errors") or []),
             execution=dict(data.get("execution", {})),
             updated_at=data.get("updatedAt", utc_now_iso()),
         )
@@ -178,7 +178,7 @@ class ProjectManifest:
             artifacts=artifacts,
             steps=steps,
             metadata=dict(migrated_data.get("metadata", {})),
-            warnings=list(migrated_data.get("warnings", [])),
+            warnings=list(migrated_data.get("warnings") or []),
             errors=list(migrated_data.get("errors", [])),
         )
 

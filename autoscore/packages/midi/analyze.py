@@ -16,7 +16,7 @@ NOTES_PER_PHRASE = 4
 def run_mock_midi_analyzer(envelope: Any, store: LocalArtifactStore) -> Any:
     """Write deterministic note fragments from phrase timing and a MIDI input."""
 
-    from autoscore.runtime.tasks import ExecutionInfo, TaskResult
+    from autoscore.core.tasks import ExecutionInfo, TaskResult
 
     midi_artifact = _find_required_input_artifact(envelope, "artifact_melody_midi")
     phrase_timeline_artifact = _find_required_input_artifact(envelope, "artifact_phrase_timeline_json")

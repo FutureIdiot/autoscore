@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from autoscore.core.artifacts import ArtifactRef
-from autoscore.packages.timeline.phrases import _timed_lyric_lines
+from autoscore.packages.timeline.phrases import _timed_lyric_lines, _untimed_lyric_phrases
 from autoscore.packages.timeline import (
     AlignedFragment,
     LyricNoteAlignment,
@@ -60,6 +60,21 @@ class PhraseSliceTests(unittest.TestCase):
         self.assertEqual(data["sliceStartMs"], 800)
         self.assertEqual(PhraseSlice.from_dict(data), phrase)
 
+    def test_phrase_slice_accepts_null_warnings_from_json(self) -> None:
+        phrase = PhraseSlice.from_dict(
+            {
+                "id": "phrase_001",
+                "index": 0,
+                "phraseStartMs": 1000,
+                "phraseEndMs": 4200,
+                "sliceStartMs": 800,
+                "sliceEndMs": 4400,
+                "warnings": None,
+            }
+        )
+
+        self.assertEqual(phrase.warnings, [])
+
     def test_rejects_slice_that_does_not_cover_phrase(self) -> None:
         with self.assertRaises(ValueError):
             PhraseSlice(
@@ -89,6 +104,41 @@ class PhraseSliceTests(unittest.TestCase):
 
         self.assertEqual([line.start_ms for line in timed_lines], [2500, 8000])
         self.assertEqual([line.text for line in timed_lines], ["first line", "second line"])
+
+    def test_srt_timed_lyrics_keep_numeric_text_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lyrics_path = Path(temp_dir) / "lyrics.srt"
+            lyrics_path.write_text(
+                "1\n"
+                "00:00:02,500 --> 00:00:05,000\n"
+                "2024\n"
+                "123\n",
+                encoding="utf-8",
+            )
+
+            timed_lines = _timed_lyric_lines(lyrics_path)
+
+        self.assertEqual([line.start_ms for line in timed_lines], [2500])
+        self.assertEqual([line.text for line in timed_lines], ["2024 123"])
+
+    def test_untimed_lyrics_keep_numeric_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lyrics_path = Path(temp_dir) / "lyrics.txt"
+            lyrics_path.write_text("2024\n123\n", encoding="utf-8")
+
+            phrases = _untimed_lyric_phrases(lyrics_path)
+
+        self.assertEqual(phrases, ["2024", "123"])
+
+    def test_lrc_timed_lyrics_merge_duplicate_timestamps(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lyrics_path = Path(temp_dir) / "lyrics.lrc"
+            lyrics_path.write_text("[00:02.50]first\n[00:02.50]second\n", encoding="utf-8")
+
+            timed_lines = _timed_lyric_lines(lyrics_path)
+
+        self.assertEqual([line.start_ms for line in timed_lines], [2500])
+        self.assertEqual([line.text for line in timed_lines], ["first second"])
 
 
 class PhraseAlignmentTests(unittest.TestCase):

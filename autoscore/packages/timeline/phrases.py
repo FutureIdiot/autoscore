@@ -8,7 +8,7 @@ import shutil
 import wave
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from autoscore.core.artifacts import ArtifactRef, LocalArtifactStore
 from autoscore.core.problems import ProblemRecord
@@ -70,7 +70,7 @@ class PhraseSlice:
             boundary_confidence=(
                 float(data["boundaryConfidence"]) if data.get("boundaryConfidence") is not None else None
             ),
-            warnings=list(data.get("warnings", [])),
+            warnings=list(data.get("warnings") or []),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -106,84 +106,193 @@ _SRT_TIMESTAMP_PATTERN = re.compile(
 )
 
 
-def run_mock_phrase_detector(envelope: Any, store: LocalArtifactStore) -> Any:
+@dataclass(frozen=True, slots=True)
+class TimedLyricLine:
+    start_ms: int
+    text: str
+
+
+class PhraseTaskEnvelope(Protocol):
+    task_id: str
+    project_id: str
+    task_type: str
+    input_artifact_index: dict[str, ArtifactRef]
+
+
+@dataclass(slots=True)
+class PhraseDetectorInputs:
+    vocals_artifact: ArtifactRef
+    vocals_path: Path
+    global_tempo: float
+    meter: dict[str, int]
+    total_duration_ms: int
+    lyric_lines: list[str]
+    timed_lyrics: list[TimedLyricLine]
+    warnings: list[ProblemRecord]
+
+
+def run_mock_phrase_detector(envelope: PhraseTaskEnvelope, store: LocalArtifactStore) -> Any:
     """Write deterministic phrase slices from lyric/vocal-like phrase evidence."""
 
-    from autoscore.runtime.tasks import ExecutionInfo, TaskResult
+    from autoscore.core.tasks import ExecutionInfo, TaskResult
 
+    inputs = _parse_phrase_detector_inputs(envelope, store)
+    bar_ms = _bar_duration_ms(inputs.global_tempo, inputs.meter)
+    phrases = _detect_mock_phrase_slices(inputs, bar_ms=bar_ms)
+    output_artifacts, phrase_slices = _write_phrase_outputs(
+        phrases,
+        vocals_artifact=inputs.vocals_artifact,
+        vocals_path=inputs.vocals_path,
+        store=store,
+    )
+    output_artifacts.insert(
+        0,
+        _write_phrase_timeline(
+            phrase_slices,
+            meter=inputs.meter,
+            bar_ms=bar_ms,
+            store=store,
+        ),
+    )
+    return TaskResult(
+        task_id=envelope.task_id,
+        project_id=envelope.project_id,
+        task_type=envelope.task_type,
+        status="succeeded",
+        output_artifacts=output_artifacts,
+        warnings=inputs.warnings,
+        execution=ExecutionInfo(mode="local", transport="in_process", node_id="timeline-local"),
+    )
+
+
+def _parse_phrase_detector_inputs(envelope: PhraseTaskEnvelope, store: LocalArtifactStore) -> PhraseDetectorInputs:
     warnings = []
     vocals_artifact = _find_required_input_artifact(envelope, "artifact_vocals_wav")
-    tempo_artifact = _find_optional_input_artifact(envelope, "artifact_tempo_timeline_json")
-    lyrics_artifact = _find_optional_input_artifact(envelope, "artifact_lyrics_txt")
-    metadata_artifact = _find_optional_input_artifact(envelope, "artifact_manual_metadata_json")
-
-    vocals_path = store.materialize(vocals_artifact)
-    if tempo_artifact is None:
-        tempo_data = {"globalTempo": 120}
-        warnings.append(
-            ProblemRecord.warning(
-                "phrases.missing_tempo",
-                "tempo timeline was not provided; detectPhrases defaulted to 120 BPM",
-            )
-        )
-    else:
-        tempo_data = json.loads(store.materialize(tempo_artifact).read_text(encoding="utf-8"))
-    if metadata_artifact is None:
-        metadata = {}
-        warnings.append(
-            ProblemRecord.warning(
-                "phrases.missing_metadata",
-                "manual metadata was not provided; detectPhrases defaulted to 4/4 meter",
-            )
-        )
-    else:
-        metadata = json.loads(store.materialize(metadata_artifact).read_text(encoding="utf-8"))
+    tempo_data, tempo_warnings = _load_tempo_data(envelope, store)
+    metadata, metadata_warnings = _load_manual_metadata(envelope, store)
+    warnings.extend(tempo_warnings)
+    warnings.extend(metadata_warnings)
 
     global_tempo = float(tempo_data["globalTempo"])
     meter = _normalize_meter(metadata.get("meter"))
     bar_ms = _bar_duration_ms(global_tempo, meter)
-    total_duration_ms = _audio_duration_ms(vocals_path)
-    lyric_lines: list[str] = []
-    timed_lyrics: list[TimedLyricLine] = []
-    if lyrics_artifact is not None:
-        lyrics_path = store.materialize(lyrics_artifact)
-        lyric_lines = _untimed_lyric_phrases(lyrics_path)
-        timed_lyrics = _timed_lyric_lines(lyrics_path)
-    if total_duration_ms is None:
-        total_duration_ms = _mock_duration_from_evidence(
-            timed_lyrics=timed_lyrics,
-            lyric_phrase_count=len(lyric_lines),
-            bar_ms=bar_ms,
+    vocals_path = store.materialize(vocals_artifact)
+    lyrics_artifact = _find_optional_input_artifact(envelope, "artifact_lyrics_txt")
+    lyric_lines, timed_lyrics = _load_lyric_evidence(lyrics_artifact, store)
+    total_duration_ms = _resolve_total_duration_ms(
+        vocals_path,
+        timed_lyrics=timed_lyrics,
+        lyric_phrase_count=len(lyric_lines),
+        bar_ms=bar_ms,
+        lyrics_provided=lyrics_artifact is not None,
+        warnings=warnings,
+    )
+    return PhraseDetectorInputs(
+        vocals_artifact=vocals_artifact,
+        vocals_path=vocals_path,
+        global_tempo=global_tempo,
+        meter=meter,
+        total_duration_ms=total_duration_ms,
+        lyric_lines=lyric_lines,
+        timed_lyrics=timed_lyrics,
+        warnings=warnings,
+    )
+
+
+def _load_tempo_data(envelope: PhraseTaskEnvelope, store: LocalArtifactStore) -> tuple[dict[str, Any], list[ProblemRecord]]:
+    tempo_artifact = _find_optional_input_artifact(envelope, "artifact_tempo_timeline_json")
+    if tempo_artifact is not None:
+        return json.loads(store.materialize(tempo_artifact).read_text(encoding="utf-8")), []
+    return {"globalTempo": 120}, [
+        ProblemRecord.warning(
+            "phrases.missing_tempo",
+            "tempo timeline was not provided; detectPhrases defaulted to 120 BPM",
         )
-        if lyrics_artifact is None:
+    ]
+
+
+def _load_manual_metadata(
+    envelope: PhraseTaskEnvelope,
+    store: LocalArtifactStore,
+) -> tuple[dict[str, Any], list[ProblemRecord]]:
+    metadata_artifact = _find_optional_input_artifact(envelope, "artifact_manual_metadata_json")
+    if metadata_artifact is not None:
+        return json.loads(store.materialize(metadata_artifact).read_text(encoding="utf-8")), []
+    return {}, [
+        ProblemRecord.warning(
+            "phrases.missing_metadata",
+            "manual metadata was not provided; detectPhrases defaulted to 4/4 meter",
+        )
+    ]
+
+
+def _load_lyric_evidence(
+    lyrics_artifact: ArtifactRef | None,
+    store: LocalArtifactStore,
+) -> tuple[list[str], list[TimedLyricLine]]:
+    if lyrics_artifact is None:
+        return [], []
+    lyrics_path = store.materialize(lyrics_artifact)
+    return _untimed_lyric_phrases(lyrics_path), _timed_lyric_lines(lyrics_path)
+
+
+def _resolve_total_duration_ms(
+    vocals_path: Path,
+    *,
+    timed_lyrics: list[TimedLyricLine],
+    lyric_phrase_count: int,
+    bar_ms: float,
+    lyrics_provided: bool,
+    warnings: list[ProblemRecord],
+) -> int:
+    total_duration_ms = _audio_duration_ms(vocals_path)
+    if total_duration_ms is not None:
+        if not lyrics_provided:
             warnings.append(
                 ProblemRecord.warning(
                     "phrases.missing_lyrics",
-                    "lyrics were not provided and audio duration could not be read; mock detectPhrases emitted one vocal-like phrase",
+                    "lyrics were not provided; detectPhrases used audio duration only",
                 )
             )
-    elif lyrics_artifact is None:
+        return total_duration_ms
+
+    if not lyrics_provided:
         warnings.append(
             ProblemRecord.warning(
                 "phrases.missing_lyrics",
-                "lyrics were not provided; detectPhrases used audio duration only",
+                "lyrics were not provided and audio duration could not be read; mock detectPhrases emitted one vocal-like phrase",
             )
         )
+    return _mock_duration_from_evidence(
+        timed_lyrics=timed_lyrics,
+        lyric_phrase_count=lyric_phrase_count,
+        bar_ms=bar_ms,
+    )
 
-    if timed_lyrics:
-        phrases = _build_mock_phrases_from_timed_lyrics(
-            timed_lyrics,
-            total_duration_ms=total_duration_ms,
+
+def _detect_mock_phrase_slices(inputs: PhraseDetectorInputs, *, bar_ms: float) -> list[PhraseSlice]:
+    if inputs.timed_lyrics:
+        return _build_mock_phrases_from_timed_lyrics(
+            inputs.timed_lyrics,
+            total_duration_ms=inputs.total_duration_ms,
             bar_ms=bar_ms,
         )
-    elif lyric_lines:
-        phrases = _build_mock_phrases_from_lyrics(
-            lyric_lines,
-            total_duration_ms=total_duration_ms,
+    if inputs.lyric_lines:
+        return _build_mock_phrases_from_lyrics(
+            inputs.lyric_lines,
+            total_duration_ms=inputs.total_duration_ms,
             bar_ms=bar_ms,
         )
-    else:
-        phrases = _build_mock_phrases_from_vocal_activity(total_duration_ms=total_duration_ms, bar_ms=bar_ms)
+    return _build_mock_phrases_from_vocal_activity(total_duration_ms=inputs.total_duration_ms, bar_ms=bar_ms)
+
+
+def _write_phrase_outputs(
+    phrases: list[PhraseSlice],
+    *,
+    vocals_artifact: ArtifactRef,
+    vocals_path: Path,
+    store: LocalArtifactStore,
+) -> tuple[list[ArtifactRef], list[PhraseSlice]]:
     output_artifacts: list[ArtifactRef] = []
     phrase_slices: list[PhraseSlice] = []
     for phrase in phrases:
@@ -206,7 +315,16 @@ def run_mock_phrase_detector(envelope: Any, store: LocalArtifactStore) -> Any:
         output_artifacts.append(audio_artifact)
         phrase.audio_artifact = audio_artifact
         phrase_slices.append(phrase)
+    return output_artifacts, phrase_slices
 
+
+def _write_phrase_timeline(
+    phrase_slices: list[PhraseSlice],
+    *,
+    meter: dict[str, int],
+    bar_ms: float,
+    store: LocalArtifactStore,
+) -> ArtifactRef:
     timeline = {
         "source": "mock-vocal-phrase",
         "meter": meter,
@@ -223,31 +341,12 @@ def run_mock_phrase_detector(envelope: Any, store: LocalArtifactStore) -> Any:
     target = store.resolve_relative_path("timeline/phrases.json")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(timeline, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
-    output_artifacts.insert(
-        0,
-        store.create_ref(
-            artifact_id="artifact_phrase_timeline_json",
-            kind="application/json",
-            relative_path="timeline/phrases.json",
-            metadata={"mock": True, "source": "mock-vocal-phrase"},
-        ),
+    return store.create_ref(
+        artifact_id="artifact_phrase_timeline_json",
+        kind="application/json",
+        relative_path="timeline/phrases.json",
+        metadata={"mock": True, "source": "mock-vocal-phrase"},
     )
-    return TaskResult(
-        task_id=envelope.task_id,
-        project_id=envelope.project_id,
-        task_type=envelope.task_type,
-        status="succeeded",
-        output_artifacts=output_artifacts,
-        warnings=warnings,
-        execution=ExecutionInfo(mode="local", transport="in_process", node_id="timeline-local"),
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class TimedLyricLine:
-    start_ms: int
-    text: str
-
 
 def _build_mock_phrases_from_timed_lyrics(
     timed_lyrics: list[TimedLyricLine],
@@ -369,42 +468,46 @@ def _untimed_lyric_phrases(lyrics_path: Path) -> list[str]:
     phrases = []
     for line in lyrics_path.read_text(encoding="utf-8").splitlines():
         cleaned = _strip_timestamps(line).strip()
-        if cleaned and not _is_srt_sequence_number(cleaned):
+        if cleaned:
             phrases.append(cleaned)
     return phrases
 
 
 def _timed_lyric_lines(lyrics_path: Path) -> list[TimedLyricLine]:
+    lines = [line.strip() for line in lyrics_path.read_text(encoding="utf-8").splitlines()]
     timed_lines: list[TimedLyricLine] = []
-    pending_srt_start_ms: int | None = None
-    pending_srt_text: list[str] = []
-    for raw_line in lyrics_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
         if not line:
-            _append_pending_srt_line(timed_lines, pending_srt_start_ms, pending_srt_text)
-            pending_srt_start_ms = None
-            pending_srt_text = []
+            index += 1
             continue
+
         lrc_matches = list(_LRC_TIMESTAMP_PATTERN.finditer(line))
         if lrc_matches:
-            _append_pending_srt_line(timed_lines, pending_srt_start_ms, pending_srt_text)
-            pending_srt_start_ms = None
-            pending_srt_text = []
             text = _strip_timestamps(line).strip()
             if text:
                 for match in lrc_matches:
                     timed_lines.append(TimedLyricLine(start_ms=_lrc_match_to_ms(match), text=text))
+            index += 1
             continue
+
+        if _is_srt_sequence_number(line) and index + 1 < len(lines) and _is_srt_timestamp_line(lines[index + 1]):
+            index += 1
+            line = lines[index]
+
         srt_match = _SRT_TIMESTAMP_PATTERN.search(line)
         if srt_match and "-->" in line:
-            _append_pending_srt_line(timed_lines, pending_srt_start_ms, pending_srt_text)
-            pending_srt_start_ms = _srt_match_to_ms(srt_match)
-            pending_srt_text = []
+            text_lines = []
+            index += 1
+            while index < len(lines) and lines[index] and not _starts_srt_cue(lines, index):
+                text_lines.append(lines[index])
+                index += 1
+            _append_pending_srt_line(timed_lines, _srt_match_to_ms(srt_match), text_lines)
             continue
-        if pending_srt_start_ms is not None and not _is_srt_sequence_number(line):
-            pending_srt_text.append(line)
-    _append_pending_srt_line(timed_lines, pending_srt_start_ms, pending_srt_text)
-    return sorted(timed_lines, key=lambda item: item.start_ms)
+
+        index += 1
+    return _merge_timed_lyric_lines(timed_lines)
 
 
 def _append_pending_srt_line(
@@ -417,6 +520,16 @@ def _append_pending_srt_line(
     text = " ".join(line.strip() for line in text_lines if line.strip())
     if text:
         timed_lines.append(TimedLyricLine(start_ms=start_ms, text=text))
+
+
+def _merge_timed_lyric_lines(timed_lines: list[TimedLyricLine]) -> list[TimedLyricLine]:
+    merged: dict[int, list[str]] = {}
+    for line in sorted(timed_lines, key=lambda item: item.start_ms):
+        merged.setdefault(line.start_ms, []).append(line.text)
+    return [
+        TimedLyricLine(start_ms=start_ms, text=" ".join(texts))
+        for start_ms, texts in sorted(merged.items())
+    ]
 
 
 def _strip_timestamps(line: str) -> str:
@@ -443,6 +556,17 @@ def _srt_match_to_ms(match: re.Match[str]) -> int:
 
 def _is_srt_sequence_number(line: str) -> bool:
     return line.isdecimal()
+
+
+def _is_srt_timestamp_line(line: str) -> bool:
+    return "-->" in line and _SRT_TIMESTAMP_PATTERN.search(line) is not None
+
+
+def _starts_srt_cue(lines: list[str], index: int) -> bool:
+    line = lines[index]
+    if _is_srt_timestamp_line(line):
+        return True
+    return _is_srt_sequence_number(line) and index + 1 < len(lines) and _is_srt_timestamp_line(lines[index + 1])
 
 
 def _audio_duration_ms(path: Path) -> int | None:

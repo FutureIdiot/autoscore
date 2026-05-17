@@ -12,7 +12,7 @@ from autoscore.core.problems import ProblemRecord
 def run_mock_lyric_analyzer(envelope: Any, store: LocalArtifactStore) -> Any:
     """Write deterministic lyric fragments from lyrics text and phrase timing."""
 
-    from autoscore.runtime.tasks import ExecutionInfo, TaskResult
+    from autoscore.core.tasks import ExecutionInfo, TaskResult
 
     lyrics_artifact = _find_required_input_artifact(envelope, "artifact_lyrics_txt")
     phrase_timeline_artifact = _find_required_input_artifact(envelope, "artifact_phrase_timeline_json")

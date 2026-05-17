@@ -12,7 +12,7 @@ from autoscore.core.problems import ProblemRecord
 def run_mock_score_json_builder(envelope: Any, store: LocalArtifactStore) -> Any:
     """Write a placeholder score.json from current mock timeline artifacts."""
 
-    from autoscore.runtime.tasks import ExecutionInfo, TaskResult
+    from autoscore.core.tasks import ExecutionInfo, TaskResult
 
     phrase_artifact = _find_required_input_artifact(envelope, "artifact_phrase_timeline_json")
     notes_artifact = _find_required_input_artifact(envelope, "artifact_midi_notes_json")

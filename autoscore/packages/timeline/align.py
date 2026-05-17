@@ -116,7 +116,7 @@ class PhraseAlignment:
             target_anchor_ms=int(data["targetAnchorMs"]),
             detected_anchor_ms=int(data["detectedAnchorMs"]),
             phrase_offset_ms=data.get("phraseOffsetMs"),
-            warnings=list(data.get("warnings", [])),
+            warnings=list(data.get("warnings") or []),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -153,7 +153,7 @@ class LyricNoteAlignment:
             lyric_id=data["lyricId"],
             note_ids=list(data["noteIds"]),
             confidence=data.get("confidence"),
-            warnings=list(data.get("warnings", [])),
+            warnings=list(data.get("warnings") or []),
         )
 
     def to_dict(self) -> dict[str, Any]:

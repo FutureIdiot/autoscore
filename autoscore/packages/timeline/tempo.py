@@ -83,7 +83,7 @@ class TempoTimeline:
             grid_offset_ms=float(data.get("gridOffsetMs", 0)),
             timebase=int(data.get("timebase", DEFAULT_TIMEBASE)),
             candidates=[TempoCandidate.from_dict(item) for item in data.get("candidates", [])],
-            warnings=list(data.get("warnings", [])),
+            warnings=list(data.get("warnings") or []),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -120,7 +120,7 @@ def tick_to_ms(tick: int | float, *, bpm: float, grid_offset_ms: float = 0, time
 def run_mock_tempo_estimator(envelope: Any, store: LocalArtifactStore) -> Any:
     """Write a deterministic tempo timeline artifact from manual metadata."""
 
-    from autoscore.runtime.tasks import ExecutionInfo, TaskResult
+    from autoscore.core.tasks import ExecutionInfo, TaskResult
 
     warnings = []
     metadata_artifact = _find_input_artifact(envelope, "artifact_manual_metadata_json")
