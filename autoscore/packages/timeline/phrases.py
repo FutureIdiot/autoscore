@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import wave
 from dataclasses import dataclass
@@ -90,15 +91,23 @@ class PhraseSlice:
 
 
 DEFAULT_METER = {"numerator": 4, "denominator": 4}
-TARGET_PHRASE_BARS = 8
-MIN_PHRASE_BARS = 7
-TARGET_WINDOW_BARS = 1
 HARD_MAX_BARS = 32
 PADDING_MS = 400
+MOCK_VOCAL_LEAD_IN_MS = 1200
+MOCK_SILENCE_GAP_MS = 600
+MIN_MOCK_PHRASE_MS = 1200
+TEMPO_ADVISORY_PHRASE_BARS = 4
+
+_LRC_TIMESTAMP_PATTERN = re.compile(
+    r"\[(?P<minutes>\d{1,3}):(?P<seconds>\d{2})(?:[.:](?P<fraction>\d{1,3}))?\]"
+)
+_SRT_TIMESTAMP_PATTERN = re.compile(
+    r"(?P<hours>\d{1,2}):(?P<minutes>\d{2}):(?P<seconds>\d{2})(?:[,.](?P<millis>\d{1,3}))?"
+)
 
 
 def run_mock_phrase_detector(envelope: Any, store: LocalArtifactStore) -> Any:
-    """Write deterministic phrase slices from tempo/meter context."""
+    """Write deterministic phrase slices from lyric/vocal-like phrase evidence."""
 
     from autoscore.runtime.tasks import ExecutionInfo, TaskResult
 
@@ -133,18 +142,26 @@ def run_mock_phrase_detector(envelope: Any, store: LocalArtifactStore) -> Any:
     global_tempo = float(tempo_data["globalTempo"])
     meter = _normalize_meter(metadata.get("meter"))
     bar_ms = _bar_duration_ms(global_tempo, meter)
-    target_phrase_ms = round(TARGET_PHRASE_BARS * bar_ms)
     total_duration_ms = _audio_duration_ms(vocals_path)
-    if total_duration_ms is None and lyrics_artifact is not None:
-        total_duration_ms = _mock_duration_from_lyrics(store.materialize(lyrics_artifact), target_phrase_ms)
+    lyric_lines: list[str] = []
+    timed_lyrics: list[TimedLyricLine] = []
+    if lyrics_artifact is not None:
+        lyrics_path = store.materialize(lyrics_artifact)
+        lyric_lines = _untimed_lyric_phrases(lyrics_path)
+        timed_lyrics = _timed_lyric_lines(lyrics_path)
     if total_duration_ms is None:
-        total_duration_ms = target_phrase_ms
-        warnings.append(
-            ProblemRecord.warning(
-                "phrases.missing_lyrics",
-                "lyrics were not provided and audio duration could not be read; mock detectPhrases emitted one target-length phrase",
-            )
+        total_duration_ms = _mock_duration_from_evidence(
+            timed_lyrics=timed_lyrics,
+            lyric_phrase_count=len(lyric_lines),
+            bar_ms=bar_ms,
         )
+        if lyrics_artifact is None:
+            warnings.append(
+                ProblemRecord.warning(
+                    "phrases.missing_lyrics",
+                    "lyrics were not provided and audio duration could not be read; mock detectPhrases emitted one vocal-like phrase",
+                )
+            )
     elif lyrics_artifact is None:
         warnings.append(
             ProblemRecord.warning(
@@ -153,7 +170,20 @@ def run_mock_phrase_detector(envelope: Any, store: LocalArtifactStore) -> Any:
             )
         )
 
-    phrases = _build_mock_phrases(total_duration_ms=total_duration_ms, bar_ms=bar_ms)
+    if timed_lyrics:
+        phrases = _build_mock_phrases_from_timed_lyrics(
+            timed_lyrics,
+            total_duration_ms=total_duration_ms,
+            bar_ms=bar_ms,
+        )
+    elif lyric_lines:
+        phrases = _build_mock_phrases_from_lyrics(
+            lyric_lines,
+            total_duration_ms=total_duration_ms,
+            bar_ms=bar_ms,
+        )
+    else:
+        phrases = _build_mock_phrases_from_vocal_activity(total_duration_ms=total_duration_ms, bar_ms=bar_ms)
     output_artifacts: list[ArtifactRef] = []
     phrase_slices: list[PhraseSlice] = []
     for phrase in phrases:
@@ -178,14 +208,14 @@ def run_mock_phrase_detector(envelope: Any, store: LocalArtifactStore) -> Any:
         phrase_slices.append(phrase)
 
     timeline = {
-        "source": "mock-bar-window",
+        "source": "mock-vocal-phrase",
         "meter": meter,
         "settings": {
-            "targetPhraseBars": TARGET_PHRASE_BARS,
-            "minPhraseBars": MIN_PHRASE_BARS,
-            "targetWindowBars": TARGET_WINDOW_BARS,
+            "tempoAdvisoryPhraseBars": TEMPO_ADVISORY_PHRASE_BARS,
             "hardMaxBars": HARD_MAX_BARS,
             "paddingMs": PADDING_MS,
+            "mockVocalLeadInMs": MOCK_VOCAL_LEAD_IN_MS,
+            "mockSilenceGapMs": MOCK_SILENCE_GAP_MS,
         },
         "barDurationMs": bar_ms,
         "phrases": [phrase.to_dict() for phrase in phrase_slices],
@@ -199,7 +229,7 @@ def run_mock_phrase_detector(envelope: Any, store: LocalArtifactStore) -> Any:
             artifact_id="artifact_phrase_timeline_json",
             kind="application/json",
             relative_path="timeline/phrases.json",
-            metadata={"mock": True, "source": "mock-bar-window"},
+            metadata={"mock": True, "source": "mock-vocal-phrase"},
         ),
     )
     return TaskResult(
@@ -213,15 +243,67 @@ def run_mock_phrase_detector(envelope: Any, store: LocalArtifactStore) -> Any:
     )
 
 
-def _build_mock_phrases(*, total_duration_ms: int, bar_ms: float) -> list[PhraseSlice]:
-    phrase_ms = round(TARGET_PHRASE_BARS * bar_ms)
-    if phrase_ms <= 0:
-        raise ValueError("phrase duration must be positive")
-    phrase_count = max(1, round(total_duration_ms / phrase_ms))
+@dataclass(frozen=True, slots=True)
+class TimedLyricLine:
+    start_ms: int
+    text: str
+
+
+def _build_mock_phrases_from_timed_lyrics(
+    timed_lyrics: list[TimedLyricLine],
+    *,
+    total_duration_ms: int,
+    bar_ms: float,
+) -> list[PhraseSlice]:
     phrases = []
-    for index in range(phrase_count):
-        start_ms = round(index * total_duration_ms / phrase_count)
-        end_ms = round((index + 1) * total_duration_ms / phrase_count)
+    ordered = sorted(timed_lyrics, key=lambda item: item.start_ms)
+    default_phrase_ms = _advisory_phrase_ms(bar_ms)
+    for index, line in enumerate(ordered):
+        next_start_ms = ordered[index + 1].start_ms if index + 1 < len(ordered) else None
+        end_limit = (
+            total_duration_ms
+            if next_start_ms is None
+            else max(line.start_ms + 1, next_start_ms - MOCK_SILENCE_GAP_MS)
+        )
+        end_ms = min(end_limit, line.start_ms + default_phrase_ms)
+        end_ms = max(line.start_ms + MIN_MOCK_PHRASE_MS, end_ms)
+        end_ms = min(max(line.start_ms + 1, total_duration_ms), end_ms)
+        phrase_id = f"phrase_{index + 1:03d}"
+        phrases.append(
+            PhraseSlice(
+                phrase_id=phrase_id,
+                index=index,
+                phrase_start_ms=line.start_ms,
+                phrase_end_ms=end_ms,
+                slice_start_ms=max(0, line.start_ms - PADDING_MS),
+                slice_end_ms=end_ms + PADDING_MS,
+                start_bar=line.start_ms / bar_ms,
+                end_bar=end_ms / bar_ms,
+                boundary_source="timed-lyrics",
+                boundary_confidence=0.8,
+                warnings=["mock slice uses copied vocals; timed lyric anchors are not audio-trimmed yet"],
+            )
+        )
+    return phrases
+
+
+def _build_mock_phrases_from_lyrics(
+    lyric_lines: list[str],
+    *,
+    total_duration_ms: int,
+    bar_ms: float,
+) -> list[PhraseSlice]:
+    phrase_ms = _advisory_phrase_ms(bar_ms)
+    phrases = []
+    start_ms = min(MOCK_VOCAL_LEAD_IN_MS, max(0, total_duration_ms - MIN_MOCK_PHRASE_MS))
+    for index, _line in enumerate(lyric_lines):
+        remaining_phrases = len(lyric_lines) - index
+        remaining_ms = max(MIN_MOCK_PHRASE_MS, total_duration_ms - start_ms)
+        duration_ms = min(
+            phrase_ms,
+            max(MIN_MOCK_PHRASE_MS, round(remaining_ms / remaining_phrases) - MOCK_SILENCE_GAP_MS),
+        )
+        end_ms = min(total_duration_ms, start_ms + duration_ms)
         if end_ms <= start_ms:
             end_ms = start_ms + 1
         phrase_id = f"phrase_{index + 1:03d}"
@@ -235,19 +317,106 @@ def _build_mock_phrases(*, total_duration_ms: int, bar_ms: float) -> list[Phrase
                 slice_end_ms=end_ms + PADDING_MS,
                 start_bar=start_ms / bar_ms,
                 end_bar=end_ms / bar_ms,
-                boundary_source="mock-bar-window",
-                boundary_confidence=0.25,
-                warnings=["mock slice uses copied vocals; real audio trimming is not enabled yet"],
+                boundary_source="mock-lyric-vocal-activity",
+                boundary_confidence=0.45,
+                warnings=["mock slice uses copied vocals; lyric phrases simulate vocal activity until real detection exists"],
             )
         )
+        start_ms = end_ms + MOCK_SILENCE_GAP_MS
     return phrases
 
 
-def _mock_duration_from_lyrics(lyrics_path: Path, target_phrase_ms: int) -> int:
-    text = lyrics_path.read_text(encoding="utf-8")
-    nonempty_lines = [line for line in text.splitlines() if line.strip()]
-    phrase_count = max(1, len(nonempty_lines))
-    return phrase_count * target_phrase_ms
+def _build_mock_phrases_from_vocal_activity(*, total_duration_ms: int, bar_ms: float) -> list[PhraseSlice]:
+    start_ms = min(MOCK_VOCAL_LEAD_IN_MS, max(0, total_duration_ms - MIN_MOCK_PHRASE_MS))
+    end_ms = min(total_duration_ms, start_ms + _advisory_phrase_ms(bar_ms))
+    if end_ms <= start_ms:
+        end_ms = start_ms + 1
+    return [
+        PhraseSlice(
+            phrase_id="phrase_001",
+            index=0,
+            phrase_start_ms=start_ms,
+            phrase_end_ms=end_ms,
+            slice_start_ms=max(0, start_ms - PADDING_MS),
+            slice_end_ms=end_ms + PADDING_MS,
+            start_bar=start_ms / bar_ms,
+            end_bar=end_ms / bar_ms,
+            boundary_source="mock-vocal-activity",
+            boundary_confidence=0.3,
+            warnings=["mock slice uses copied vocals; real vocal activity detection is not enabled yet"],
+        )
+    ]
+
+
+def _mock_duration_from_evidence(
+    *,
+    timed_lyrics: list[TimedLyricLine],
+    lyric_phrase_count: int,
+    bar_ms: float,
+) -> int:
+    phrase_ms = _advisory_phrase_ms(bar_ms)
+    if timed_lyrics:
+        return max(timed_lyrics[-1].start_ms + phrase_ms, phrase_ms)
+    phrase_count = max(1, lyric_phrase_count)
+    return MOCK_VOCAL_LEAD_IN_MS + phrase_count * phrase_ms + max(0, phrase_count - 1) * MOCK_SILENCE_GAP_MS
+
+
+def _advisory_phrase_ms(bar_ms: float) -> int:
+    return max(MIN_MOCK_PHRASE_MS, round(TEMPO_ADVISORY_PHRASE_BARS * bar_ms))
+
+
+def _untimed_lyric_phrases(lyrics_path: Path) -> list[str]:
+    phrases = []
+    for line in lyrics_path.read_text(encoding="utf-8").splitlines():
+        cleaned = _strip_timestamps(line).strip()
+        if cleaned and not _is_srt_sequence_number(cleaned):
+            phrases.append(cleaned)
+    return phrases
+
+
+def _timed_lyric_lines(lyrics_path: Path) -> list[TimedLyricLine]:
+    timed_lines: list[TimedLyricLine] = []
+    for raw_line in lyrics_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lrc_matches = list(_LRC_TIMESTAMP_PATTERN.finditer(line))
+        if lrc_matches:
+            text = _strip_timestamps(line).strip()
+            if text:
+                for match in lrc_matches:
+                    timed_lines.append(TimedLyricLine(start_ms=_lrc_match_to_ms(match), text=text))
+            continue
+        srt_match = _SRT_TIMESTAMP_PATTERN.search(line)
+        if srt_match and "-->" in line:
+            timed_lines.append(TimedLyricLine(start_ms=_srt_match_to_ms(srt_match), text=""))
+    return sorted(timed_lines, key=lambda item: item.start_ms)
+
+
+def _strip_timestamps(line: str) -> str:
+    stripped = _LRC_TIMESTAMP_PATTERN.sub("", line)
+    stripped = _SRT_TIMESTAMP_PATTERN.sub("", stripped)
+    return stripped.replace("-->", "").strip()
+
+
+def _lrc_match_to_ms(match: re.Match[str]) -> int:
+    minutes = int(match.group("minutes"))
+    seconds = int(match.group("seconds"))
+    fraction = match.group("fraction") or "0"
+    millis = int(fraction.ljust(3, "0")[:3])
+    return minutes * 60_000 + seconds * 1000 + millis
+
+
+def _srt_match_to_ms(match: re.Match[str]) -> int:
+    hours = int(match.group("hours"))
+    minutes = int(match.group("minutes"))
+    seconds = int(match.group("seconds"))
+    millis = int((match.group("millis") or "0").ljust(3, "0")[:3])
+    return hours * 3_600_000 + minutes * 60_000 + seconds * 1000 + millis
+
+
+def _is_srt_sequence_number(line: str) -> bool:
+    return line.isdecimal()
 
 
 def _audio_duration_ms(path: Path) -> int | None:
