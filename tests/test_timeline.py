@@ -130,6 +130,20 @@ class PhraseSliceTests(unittest.TestCase):
 
         self.assertEqual(phrases, ["2024", "123"])
 
+    def test_untimed_lyrics_skip_srt_cue_numbers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lyrics_path = Path(temp_dir) / "lyrics.srt"
+            lyrics_path.write_text(
+                "1\n"
+                "00:00:02,500 --> 00:00:05,000\n"
+                "first line\n",
+                encoding="utf-8",
+            )
+
+            phrases = _untimed_lyric_phrases(lyrics_path)
+
+        self.assertEqual(phrases, ["first line"])
+
     def test_lrc_timed_lyrics_merge_duplicate_timestamps(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             lyrics_path = Path(temp_dir) / "lyrics.lrc"

@@ -112,6 +112,13 @@ class TimedLyricLine:
     text: str
 
 
+@dataclass(frozen=True, slots=True)
+class SrtCue:
+    start_ms: int
+    end_ms: int | None
+    text: str
+
+
 class PhraseTaskEnvelope(Protocol):
     task_id: str
     project_id: str
@@ -125,10 +132,21 @@ class PhraseDetectorInputs:
     vocals_path: Path
     global_tempo: float
     meter: dict[str, int]
+    bar_ms: float
     total_duration_ms: int
     lyric_lines: list[str]
     timed_lyrics: list[TimedLyricLine]
     warnings: list[ProblemRecord]
+
+
+@dataclass(slots=True)
+class PhraseDetectorOutputs:
+    timeline_artifact: ArtifactRef
+    phrase_audio_artifacts: list[ArtifactRef]
+    phrase_slices: list[PhraseSlice]
+
+    def output_artifacts(self) -> list[ArtifactRef]:
+        return [self.timeline_artifact, *self.phrase_audio_artifacts]
 
 
 def run_mock_phrase_detector(envelope: PhraseTaskEnvelope, store: LocalArtifactStore) -> Any:
@@ -137,29 +155,29 @@ def run_mock_phrase_detector(envelope: PhraseTaskEnvelope, store: LocalArtifactS
     from autoscore.core.tasks import ExecutionInfo, TaskResult
 
     inputs = _parse_phrase_detector_inputs(envelope, store)
-    bar_ms = _bar_duration_ms(inputs.global_tempo, inputs.meter)
-    phrases = _detect_mock_phrase_slices(inputs, bar_ms=bar_ms)
-    output_artifacts, phrase_slices = _write_phrase_outputs(
+    phrases = _detect_mock_phrase_slices(inputs)
+    phrase_audio_artifacts, phrase_slices = _write_phrase_outputs(
         phrases,
         vocals_artifact=inputs.vocals_artifact,
         vocals_path=inputs.vocals_path,
         store=store,
     )
-    output_artifacts.insert(
-        0,
-        _write_phrase_timeline(
+    outputs = PhraseDetectorOutputs(
+        timeline_artifact=_write_phrase_timeline(
             phrase_slices,
             meter=inputs.meter,
-            bar_ms=bar_ms,
+            bar_ms=inputs.bar_ms,
             store=store,
         ),
+        phrase_audio_artifacts=phrase_audio_artifacts,
+        phrase_slices=phrase_slices,
     )
     return TaskResult(
         task_id=envelope.task_id,
         project_id=envelope.project_id,
         task_type=envelope.task_type,
         status="succeeded",
-        output_artifacts=output_artifacts,
+        output_artifacts=outputs.output_artifacts(),
         warnings=inputs.warnings,
         execution=ExecutionInfo(mode="local", transport="in_process", node_id="timeline-local"),
     )
@@ -192,6 +210,7 @@ def _parse_phrase_detector_inputs(envelope: PhraseTaskEnvelope, store: LocalArti
         vocals_path=vocals_path,
         global_tempo=global_tempo,
         meter=meter,
+        bar_ms=bar_ms,
         total_duration_ms=total_duration_ms,
         lyric_lines=lyric_lines,
         timed_lyrics=timed_lyrics,
@@ -270,20 +289,20 @@ def _resolve_total_duration_ms(
     )
 
 
-def _detect_mock_phrase_slices(inputs: PhraseDetectorInputs, *, bar_ms: float) -> list[PhraseSlice]:
+def _detect_mock_phrase_slices(inputs: PhraseDetectorInputs) -> list[PhraseSlice]:
     if inputs.timed_lyrics:
         return _build_mock_phrases_from_timed_lyrics(
             inputs.timed_lyrics,
             total_duration_ms=inputs.total_duration_ms,
-            bar_ms=bar_ms,
+            bar_ms=inputs.bar_ms,
         )
     if inputs.lyric_lines:
         return _build_mock_phrases_from_lyrics(
             inputs.lyric_lines,
             total_duration_ms=inputs.total_duration_ms,
-            bar_ms=bar_ms,
+            bar_ms=inputs.bar_ms,
         )
-    return _build_mock_phrases_from_vocal_activity(total_duration_ms=inputs.total_duration_ms, bar_ms=bar_ms)
+    return _build_mock_phrases_from_vocal_activity(total_duration_ms=inputs.total_duration_ms, bar_ms=inputs.bar_ms)
 
 
 def _write_phrase_outputs(
@@ -466,7 +485,11 @@ def _advisory_phrase_ms(bar_ms: float) -> int:
 
 def _untimed_lyric_phrases(lyrics_path: Path) -> list[str]:
     phrases = []
-    for line in lyrics_path.read_text(encoding="utf-8").splitlines():
+    text = lyrics_path.read_text(encoding="utf-8")
+    srt_skip_indexes = _srt_cue_line_indexes(text)
+    for index, line in enumerate(text.splitlines()):
+        if index in srt_skip_indexes:
+            continue
         cleaned = _strip_timestamps(line).strip()
         if cleaned:
             phrases.append(cleaned)
@@ -474,52 +497,68 @@ def _untimed_lyric_phrases(lyrics_path: Path) -> list[str]:
 
 
 def _timed_lyric_lines(lyrics_path: Path) -> list[TimedLyricLine]:
-    lines = [line.strip() for line in lyrics_path.read_text(encoding="utf-8").splitlines()]
+    text = lyrics_path.read_text(encoding="utf-8")
     timed_lines: list[TimedLyricLine] = []
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        if not line:
-            index += 1
-            continue
-
+    for line in text.splitlines():
         lrc_matches = list(_LRC_TIMESTAMP_PATTERN.finditer(line))
         if lrc_matches:
             text = _strip_timestamps(line).strip()
             if text:
                 for match in lrc_matches:
                     timed_lines.append(TimedLyricLine(start_ms=_lrc_match_to_ms(match), text=text))
-            index += 1
-            continue
-
-        if _is_srt_sequence_number(line) and index + 1 < len(lines) and _is_srt_timestamp_line(lines[index + 1]):
-            index += 1
-            line = lines[index]
-
-        srt_match = _SRT_TIMESTAMP_PATTERN.search(line)
-        if srt_match and "-->" in line:
-            text_lines = []
-            index += 1
-            while index < len(lines) and lines[index] and not _starts_srt_cue(lines, index):
-                text_lines.append(lines[index])
-                index += 1
-            _append_pending_srt_line(timed_lines, _srt_match_to_ms(srt_match), text_lines)
-            continue
-
-        index += 1
+    for cue in _parse_srt_cues(text):
+        timed_lines.append(TimedLyricLine(start_ms=cue.start_ms, text=cue.text))
     return _merge_timed_lyric_lines(timed_lines)
 
 
-def _append_pending_srt_line(
-    timed_lines: list[TimedLyricLine],
-    start_ms: int | None,
-    text_lines: list[str],
-) -> None:
-    if start_ms is None:
-        return
-    text = " ".join(line.strip() for line in text_lines if line.strip())
-    if text:
-        timed_lines.append(TimedLyricLine(start_ms=start_ms, text=text))
+def _parse_srt_cues(text: str) -> list[SrtCue]:
+    lines = [line.strip() for line in text.splitlines()]
+    cues: list[SrtCue] = []
+    index = 0
+    while index < len(lines):
+        if not _starts_srt_cue(lines, index):
+            index += 1
+            continue
+
+        if _is_srt_sequence_number(lines[index]):
+            index += 1
+
+        timestamp_line = lines[index]
+        start_match = _SRT_TIMESTAMP_PATTERN.search(timestamp_line)
+        if start_match is None:
+            index += 1
+            continue
+        end_ms = _srt_end_ms(timestamp_line)
+        index += 1
+
+        text_lines = []
+        while index < len(lines) and lines[index] and not _starts_srt_cue(lines, index):
+            text_lines.append(lines[index])
+            index += 1
+        cue_text = " ".join(line.strip() for line in text_lines if line.strip())
+        if cue_text:
+            cues.append(SrtCue(start_ms=_srt_match_to_ms(start_match), end_ms=end_ms, text=cue_text))
+    return cues
+
+
+def _srt_cue_line_indexes(text: str) -> set[int]:
+    lines = [line.strip() for line in text.splitlines()]
+    cue_line_indexes: set[int] = set()
+    index = 0
+    while index < len(lines):
+        if not _starts_srt_cue(lines, index):
+            index += 1
+            continue
+
+        if _is_srt_sequence_number(lines[index]):
+            cue_line_indexes.add(index)
+            index += 1
+        cue_line_indexes.add(index)
+        index += 1
+
+        while index < len(lines) and lines[index] and not _starts_srt_cue(lines, index):
+            index += 1
+    return cue_line_indexes
 
 
 def _merge_timed_lyric_lines(timed_lines: list[TimedLyricLine]) -> list[TimedLyricLine]:
@@ -552,6 +591,14 @@ def _srt_match_to_ms(match: re.Match[str]) -> int:
     seconds = int(match.group("seconds"))
     millis = int((match.group("millis") or "0").ljust(3, "0")[:3])
     return hours * 3_600_000 + minutes * 60_000 + seconds * 1000 + millis
+
+
+def _srt_end_ms(timestamp_line: str) -> int | None:
+    parts = timestamp_line.split("-->", maxsplit=1)
+    if len(parts) < 2:
+        return None
+    match = _SRT_TIMESTAMP_PATTERN.search(parts[1])
+    return _srt_match_to_ms(match) if match else None
 
 
 def _is_srt_sequence_number(line: str) -> bool:
