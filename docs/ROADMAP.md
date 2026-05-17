@@ -21,8 +21,9 @@ older private implementation lists that may exist locally under
 - TUI project info view/edit for manual tempo and meter.
 - Empty project creation, pending input registration, provided artifact
   attachment, and provided tempo timeline support.
-- Mock `separateAudio`, `estimateTempo`, `detectPhrases`, `analyzeMidi`, and
-  `analyzeLyrics` runners wired through controller/TUI send execution.
+- Mock `separateAudio`, `estimateTempo`, `detectPhrases`, `analyzeMidi`,
+  `analyzeLyrics`, and `buildScoreJson` runners wired through controller/TUI
+  send execution.
 - Timeline foundation models and tests.
 
 ## Current Development State
@@ -61,19 +62,21 @@ older private implementation lists that may exist locally under
 
 1. Expand Mock Task Runners
 
-   Add local/mock runners for the remaining major task types:
+   Resolve the MIDI-to-lyrics alignment model, then add local/mock runners for
+   the remaining timeline task types:
 
    ```text
    alignPhrase
    stitchPhrases
-   buildScoreJson
    ```
 
 2. End-to-End Mock Pipeline
 
    Run a full project through mock separator, mock timeline, mock MIDI
    analysis, mock lyric analysis, alignment, stitching, and placeholder score
-   export.
+   export. The current `buildScoreJson` mock can already export from analysis
+   artifacts, and should switch to aligned/stitched inputs after those nodes
+   are settled.
 
 3. Rerun and Resume Behavior
 
@@ -106,7 +109,7 @@ older private implementation lists that may exist locally under
 8. Score Export
 
    Implement canonical score schema models, validation, bar generation, and
-   `score.json` export after the mock pipeline is stable.
+   real `score.json` export after the mock pipeline is stable.
 
 ## Current Non-Goals
 

@@ -9,6 +9,7 @@ from autoscore.core.artifacts import ArtifactRef, LocalArtifactStore
 from autoscore.packages.audio.separator import run_mock_separator
 from autoscore.packages.lyric.analyze import run_mock_lyric_analyzer
 from autoscore.packages.midi.analyze import run_mock_midi_analyzer
+from autoscore.packages.score_export.score_json import run_mock_score_json_builder
 from autoscore.packages.timeline.phrases import run_mock_phrase_detector
 from autoscore.packages.timeline.tempo import run_mock_tempo_estimator
 from autoscore.runtime.tasks import ExecutionInfo, TaskEnvelope, TaskRequirements, TaskResult
@@ -183,5 +184,22 @@ _TASK_SPECS = {
             artifact_kinds=["text/plain", "application/json"],
         ),
         node_id="lyric-local",
+    ),
+    "buildScoreJson": TaskSpec(
+        runner=run_mock_score_json_builder,
+        input_artifacts=TaskInputSpec(
+            required=(
+                "artifact_phrase_timeline_json",
+                "artifact_midi_notes_json",
+                "artifact_lyric_fragments_json",
+            ),
+        ),
+        output_artifacts=("artifact_score_json",),
+        requirements=TaskRequirements(
+            node_types=["score-json-node"],
+            required_backends=["mock"],
+            artifact_kinds=["application/json"],
+        ),
+        node_id="score-export-local",
     ),
 }

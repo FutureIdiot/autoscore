@@ -5,8 +5,8 @@ inference outputs into a canonical score timeline and, later, `score.json`.
 
 This repository currently contains the project skeleton, runtime contracts,
 development controller/TUI shell, timeline foundation models, and a local mock
-pipeline through phrase detection. It does not yet run real audio separation,
-tempo estimation, MIDI analysis, lyric analysis, or score export.
+pipeline through placeholder score export. It does not yet run real audio
+separation, tempo estimation, MIDI analysis, lyric analysis, or score export.
 
 ## Current Package Layout
 
@@ -150,8 +150,9 @@ communicate with.
 - TUI project info view/edit for manual tempo and meter.
 - Empty project creation, pending input registration, provided artifact
   attachment, and provided tempo timeline support.
-- Mock `separateAudio`, `estimateTempo`, `detectPhrases`, `analyzeMidi`, and
-  `analyzeLyrics` runners wired through controller/TUI send execution.
+- Mock `separateAudio`, `estimateTempo`, `detectPhrases`, `analyzeMidi`,
+  `analyzeLyrics`, and `buildScoreJson` runners wired through controller/TUI
+  send execution.
 - Timeline foundation models:
   - tempo ms/tick conversion;
   - phrase slice metadata and mock phrase timeline output;
@@ -163,19 +164,18 @@ communicate with.
 ## Not Implemented Yet
 
 - DAG scheduler and rerun/resume behavior.
-- Mock runners beyond `separateAudio`, `estimateTempo`, `detectPhrases`,
-  `analyzeMidi`, and `analyzeLyrics`.
+- Mock align/stitch runners between analysis and score export.
 - Real separator backend.
 - Real tempo/phrase audio analysis.
 - Real MIDI event parsing.
 - Real lyric forced alignment import/analysis.
-- Score schema models and score JSON export.
+- Canonical score schema models and real score JSON export.
 - WebUI.
 
 ## Next Steps
 
-1. Add mock outputs for `alignPhrase`, `stitchPhrases`, and
-   `buildScoreJson`.
+1. Resolve the MIDI-to-lyrics alignment model, then add mock outputs for
+   `alignPhrase` and `stitchPhrases`.
 2. Build an end-to-end mock pipeline before integrating real MIDI parsing,
    lyric forced alignment, or heavy audio dependencies.
 3. Add clearer rerun/resume behavior once more downstream steps exist.

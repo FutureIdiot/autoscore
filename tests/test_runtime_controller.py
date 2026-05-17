@@ -733,6 +733,43 @@ class AutoscoreControllerTests(unittest.TestCase):
         self.assertEqual(lyric_data["lyrics"][0]["source"], "lyrics")
         self.assertEqual(lyric_data["lyrics"][0]["text"], "first line")
 
+    def test_build_score_json_writes_placeholder_score_from_mock_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_midi = Path(temp_dir) / "song.mid"
+            source_lyrics = Path(temp_dir) / "song.txt"
+            source_audio.write_bytes(b"audio")
+            source_midi.write_bytes(b"MThd")
+            source_lyrics.write_text("first line\nsecond line\n", encoding="utf-8")
+            controller = AutoscoreController(workspace)
+            controller.create_project_from_pending_inputs(
+                project_id="demo",
+                input_paths=[source_audio, source_midi],
+            )
+            controller.update_manual_project_info("demo", global_tempo=120, meter={"numerator": 4, "denominator": 4})
+            controller.attach_artifact(
+                "demo",
+                source_path=source_lyrics,
+                artifact_id="artifact_lyrics_txt",
+                kind="text/plain",
+                relative_path="input/lyrics.txt",
+                metadata={"providedAs": "lyrics"},
+            )
+            results = controller.send_to_task("demo")
+            manifest = ProjectManifest.load(workspace / "demo" / "manifest.json")
+            score_data = json.loads((workspace / "demo" / "score" / "score.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            [result.task_type for result in results],
+            ["separateAudio", "detectPhrases", "analyzeMidi", "analyzeLyrics", "buildScoreJson"],
+        )
+        self.assertIn("artifact_score_json", manifest.artifacts)
+        self.assertEqual(score_data["schema"], "autoscore.score.mock.v1")
+        self.assertEqual(score_data["source"], "mock-score-json")
+        self.assertEqual(score_data["phrases"][0]["notes"][0]["pitch"], 60)
+        self.assertEqual(score_data["phrases"][0]["lyrics"][0]["text"], "first line")
+
     def test_attach_artifact_allows_downstream_steps_to_use_provided_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir) / "workspaces"
