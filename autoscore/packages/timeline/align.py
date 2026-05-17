@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 from typing import Any
+
+from autoscore.core.artifacts import ArtifactRef, LocalArtifactStore
+from autoscore.core.problems import ProblemRecord
 
 
 @dataclass(slots=True)
@@ -17,6 +21,7 @@ class TimedFragment:
     unaligned_global_start_ms: int
     unaligned_global_end_ms: int
     source: str
+    extras: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.fragment_id:
@@ -42,10 +47,11 @@ class TimedFragment:
             unaligned_global_start_ms=int(data["unalignedGlobalStartMs"]),
             unaligned_global_end_ms=int(data["unalignedGlobalEndMs"]),
             source=data["source"],
+            extras=_fragment_extras(data),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "id": self.fragment_id,
             "phraseId": self.phrase_id,
             "localStartMs": self.local_start_ms,
@@ -54,6 +60,8 @@ class TimedFragment:
             "unalignedGlobalEndMs": self.unaligned_global_end_ms,
             "source": self.source,
         }
+        data.update(self.extras)
+        return data
 
 
 @dataclass(slots=True)
@@ -78,6 +86,7 @@ class AlignedFragment(TimedFragment):
             unaligned_global_start_ms=fragment.unaligned_global_start_ms,
             unaligned_global_end_ms=fragment.unaligned_global_end_ms,
             source=fragment.source,
+            extras=dict(fragment.extras),
             global_start_ms=fragment.unaligned_global_start_ms + phrase_offset_ms,
             global_end_ms=fragment.unaligned_global_end_ms + phrase_offset_ms,
         )
@@ -91,6 +100,21 @@ class AlignedFragment(TimedFragment):
             }
         )
         return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "AlignedFragment":
+        return cls(
+            fragment_id=data["id"],
+            phrase_id=data["phraseId"],
+            local_start_ms=int(data["localStartMs"]),
+            local_end_ms=int(data["localEndMs"]),
+            unaligned_global_start_ms=int(data["unalignedGlobalStartMs"]),
+            unaligned_global_end_ms=int(data["unalignedGlobalEndMs"]),
+            source=data["source"],
+            extras=_fragment_extras(data),
+            global_start_ms=int(data["globalStartMs"]),
+            global_end_ms=int(data["globalEndMs"]),
+        )
 
 
 @dataclass(slots=True)
@@ -238,3 +262,152 @@ def _nearest_note(lyric: AlignedFragment, notes: list[AlignedFragment]) -> tuple
     nearest = min(notes, key=lambda note: abs(((note.global_start_ms + note.global_end_ms) // 2) - lyric_center))
     distance = abs(((nearest.global_start_ms + nearest.global_end_ms) // 2) - lyric_center)
     return nearest, distance
+
+
+_FRAGMENT_CONTRACT_KEYS = {
+    "id",
+    "phraseId",
+    "localStartMs",
+    "localEndMs",
+    "unalignedGlobalStartMs",
+    "unalignedGlobalEndMs",
+    "globalStartMs",
+    "globalEndMs",
+    "source",
+}
+
+
+def _fragment_extras(data: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in data.items() if key not in _FRAGMENT_CONTRACT_KEYS}
+
+
+def run_mock_phrase_aligner(envelope: Any, store: LocalArtifactStore) -> Any:
+    """Align phrase-local note and lyric fragments with one phrase anchor each."""
+
+    from autoscore.core.tasks import ExecutionInfo, TaskResult
+
+    phrase_artifact = _find_required_input_artifact(envelope, "artifact_phrase_timeline_json")
+    notes_artifact = _find_required_input_artifact(envelope, "artifact_midi_notes_json")
+    lyrics_artifact = _find_required_input_artifact(envelope, "artifact_lyric_fragments_json")
+
+    phrase_timeline = json.loads(store.materialize(phrase_artifact).read_text(encoding="utf-8"))
+    note_data = json.loads(store.materialize(notes_artifact).read_text(encoding="utf-8"))
+    lyric_data = json.loads(store.materialize(lyrics_artifact).read_text(encoding="utf-8"))
+
+    notes = [TimedFragment.from_dict(note) for note in note_data.get("notes", [])]
+    lyrics = [TimedFragment.from_dict(lyric) for lyric in lyric_data.get("lyrics", [])]
+    phrase_alignments = _mock_phrase_alignments(
+        phrase_timeline.get("phrases", []),
+        notes=notes,
+        lyrics=lyrics,
+    )
+
+    aligned_notes: list[AlignedFragment] = []
+    aligned_lyrics: list[AlignedFragment] = []
+    for phrase_id, alignment in phrase_alignments.items():
+        aligned_notes.extend(align_fragments(_fragments_for_phrase(notes, phrase_id), alignment))
+        aligned_lyrics.extend(align_fragments(_fragments_for_phrase(lyrics, phrase_id), alignment))
+
+    lyric_note_alignments = match_lyrics_to_notes(aligned_lyrics, aligned_notes)
+
+    payload = {
+        "source": "mock-phrase-alignment",
+        "phraseTimelineArtifact": phrase_artifact.to_dict(),
+        "midiNotesArtifact": notes_artifact.to_dict(),
+        "lyricFragmentsArtifact": lyrics_artifact.to_dict(),
+        "notes": [note.to_dict() for note in sorted(aligned_notes, key=_fragment_sort_key)],
+        "lyrics": [lyric.to_dict() for lyric in sorted(aligned_lyrics, key=_fragment_sort_key)],
+        "phraseAlignments": {
+            phrase_id: alignment.to_dict()
+            for phrase_id, alignment in sorted(phrase_alignments.items())
+        },
+        "lyricNoteAlignments": [alignment.to_dict() for alignment in lyric_note_alignments],
+    }
+    target = store.resolve_relative_path("timeline/aligned.json")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    aligned_artifact = store.create_ref(
+        artifact_id="artifact_aligned_timeline_json",
+        kind="application/json",
+        relative_path="timeline/aligned.json",
+        metadata={
+            "mock": True,
+            "source": "mock-phrase-alignment",
+            "phraseTimelineArtifactId": phrase_artifact.artifact_id,
+            "midiNotesArtifactId": notes_artifact.artifact_id,
+            "lyricFragmentsArtifactId": lyrics_artifact.artifact_id,
+        },
+    )
+    return TaskResult(
+        task_id=envelope.task_id,
+        project_id=envelope.project_id,
+        task_type=envelope.task_type,
+        status="succeeded",
+        output_artifacts=[aligned_artifact],
+        warnings=[
+            ProblemRecord.warning(
+                "timeline.mock_alignment",
+                "mock alignPhrase aligned each phrase from first lyric and MIDI anchors without audio confidence scoring",
+            )
+        ],
+        execution=ExecutionInfo(mode="local", transport="in_process", node_id="timeline-local"),
+    )
+
+
+def _mock_phrase_alignments(
+    phrases: list[object],
+    *,
+    notes: list[TimedFragment],
+    lyrics: list[TimedFragment],
+) -> dict[str, PhraseAlignment]:
+    alignments: dict[str, PhraseAlignment] = {}
+    notes_by_phrase = _fragments_by_phrase(notes)
+    lyrics_by_phrase = _fragments_by_phrase(lyrics)
+    for phrase in phrases:
+        if not isinstance(phrase, dict):
+            continue
+        phrase_id = str(phrase["id"])
+        phrase_start_ms = int(phrase["phraseStartMs"])
+        phrase_notes = sorted(notes_by_phrase.get(phrase_id, []), key=_timed_fragment_sort_key)
+        phrase_lyrics = sorted(lyrics_by_phrase.get(phrase_id, []), key=_timed_fragment_sort_key)
+        anchor_note = phrase_notes[0] if phrase_notes else None
+        anchor_lyric = phrase_lyrics[0] if phrase_lyrics else None
+        detected_anchor_ms = anchor_note.unaligned_global_start_ms if anchor_note else phrase_start_ms
+        target_anchor_ms = anchor_lyric.unaligned_global_start_ms if anchor_lyric else phrase_start_ms
+        warnings: list[str] = []
+        if anchor_note is None:
+            warnings.append("no MIDI anchor found; phrase offset falls back to phrase start")
+        if anchor_lyric is None:
+            warnings.append("no lyric anchor found; phrase offset falls back to phrase start")
+        alignments[phrase_id] = PhraseAlignment(
+            target_anchor_ms=target_anchor_ms,
+            detected_anchor_ms=detected_anchor_ms,
+            warnings=warnings,
+        )
+    return alignments
+
+
+def _fragments_by_phrase(fragments: list[TimedFragment]) -> dict[str, list[TimedFragment]]:
+    grouped: dict[str, list[TimedFragment]] = {}
+    for fragment in fragments:
+        grouped.setdefault(fragment.phrase_id, []).append(fragment)
+    return grouped
+
+
+def _fragments_for_phrase(fragments: list[TimedFragment], phrase_id: str) -> list[TimedFragment]:
+    return [fragment for fragment in fragments if fragment.phrase_id == phrase_id]
+
+
+def _timed_fragment_sort_key(fragment: TimedFragment) -> tuple[int, int, str]:
+    return (fragment.unaligned_global_start_ms, fragment.unaligned_global_end_ms, fragment.fragment_id)
+
+
+def _fragment_sort_key(fragment: AlignedFragment) -> tuple[int, int, str]:
+    return (fragment.global_start_ms, fragment.global_end_ms, fragment.fragment_id)
+
+
+def _find_required_input_artifact(envelope: Any, artifact_id: str) -> ArtifactRef:
+    artifact = envelope.input_artifact_index.get(artifact_id)
+    if artifact is not None:
+        return artifact
+    raise KeyError(artifact_id)

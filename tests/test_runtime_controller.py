@@ -854,11 +854,23 @@ class AutoscoreControllerTests(unittest.TestCase):
 
         self.assertEqual(
             [result.task_type for result in results],
-            ["separateAudio", "detectPhrases", "analyzeMidi", "analyzeLyrics", "buildScoreJson"],
+            [
+                "separateAudio",
+                "detectPhrases",
+                "analyzeMidi",
+                "analyzeLyrics",
+                "alignPhrase",
+                "stitchPhrases",
+                "buildScoreJson",
+            ],
         )
+        self.assertIn("artifact_aligned_timeline_json", manifest.artifacts)
+        self.assertIn("artifact_stitched_timeline_json", manifest.artifacts)
         self.assertIn("artifact_score_json", manifest.artifacts)
         self.assertEqual(score_data["schema"], "autoscore.score.mock.v1")
         self.assertEqual(score_data["source"], "mock-score-json")
+        self.assertEqual(score_data["inputs"]["stitchedTimelineArtifactId"], "artifact_stitched_timeline_json")
+        self.assertIn("lyricNoteAlignments", score_data)
         self.assertEqual(score_data["phrases"][0]["notes"][0]["pitch"], 60)
         self.assertEqual(score_data["phrases"][0]["lyrics"][0]["text"], "first line")
 
