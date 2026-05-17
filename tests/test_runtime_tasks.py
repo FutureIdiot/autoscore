@@ -39,6 +39,27 @@ class RuntimeTaskTests(unittest.TestCase):
         self.assertEqual(envelope.schema_version, TASK_ENVELOPE_SCHEMA_VERSION)
         self.assertEqual(requirements.schema_version, TASK_REQUIREMENTS_SCHEMA_VERSION)
 
+    def test_task_envelope_indexes_input_artifacts_by_id(self) -> None:
+        first = ArtifactRef(
+            artifact_id="artifact_original_audio",
+            kind="audio/wav",
+            relative_path="input/first.wav",
+        )
+        duplicate = ArtifactRef(
+            artifact_id="artifact_original_audio",
+            kind="audio/wav",
+            relative_path="input/duplicate.wav",
+        )
+        envelope = TaskEnvelope(
+            task_id="task_001",
+            project_id="project_001",
+            task_type="separateAudio",
+            input_artifacts=[first, duplicate],
+        )
+
+        self.assertIs(envelope.input_artifact_index["artifact_original_audio"], first)
+        self.assertNotIn("inputArtifactIndex", envelope.to_dict())
+
     def test_task_result_round_trip_uses_problem_records(self) -> None:
         result = TaskResult(
             task_id="task_001",

@@ -472,14 +472,11 @@ def _normalize_meter(data: object) -> dict[str, int]:
 
 
 def _find_required_input_artifact(envelope: Any, artifact_id: str) -> ArtifactRef:
-    for artifact in envelope.input_artifacts:
-        if artifact.artifact_id == artifact_id:
-            return artifact
+    artifact = envelope.input_artifact_index.get(artifact_id)
+    if artifact is not None:
+        return artifact
     raise KeyError(f"missing required input artifact: {artifact_id}")
 
 
 def _find_optional_input_artifact(envelope: Any, artifact_id: str) -> ArtifactRef | None:
-    for artifact in envelope.input_artifacts:
-        if artifact.artifact_id == artifact_id:
-            return artifact
-    return None
+    return envelope.input_artifact_index.get(artifact_id)

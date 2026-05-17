@@ -181,7 +181,4 @@ def run_mock_tempo_estimator(envelope: Any, store: LocalArtifactStore) -> Any:
 
 
 def _find_input_artifact(envelope: Any, artifact_id: str):
-    for artifact in envelope.input_artifacts:
-        if artifact.artifact_id == artifact_id:
-            return artifact
-    return None
+    return envelope.input_artifact_index.get(artifact_id)

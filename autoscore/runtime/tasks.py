@@ -123,6 +123,13 @@ class TaskEnvelope:
     requirements: TaskRequirements = field(default_factory=TaskRequirements)
     requested_outputs: list[str] = field(default_factory=list)
     execution: ExecutionInfo = field(default_factory=ExecutionInfo)
+    _input_artifact_index: dict[str, ArtifactRef] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _input_artifact_index_size: int = field(default=-1, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.task_id:
@@ -133,6 +140,18 @@ class TaskEnvelope:
             raise ValueError("task_type is required")
         if self.schema_version != TASK_ENVELOPE_SCHEMA_VERSION:
             raise ValueError(f"unsupported schema_version: {self.schema_version}")
+
+    @property
+    def input_artifact_index(self) -> dict[str, ArtifactRef]:
+        """Return input artifacts keyed by artifact id for repeated lookups."""
+
+        if self._input_artifact_index is None or self._input_artifact_index_size != len(self.input_artifacts):
+            artifact_index: dict[str, ArtifactRef] = {}
+            for artifact in self.input_artifacts:
+                artifact_index.setdefault(artifact.artifact_id, artifact)
+            self._input_artifact_index = artifact_index
+            self._input_artifact_index_size = len(self.input_artifacts)
+        return self._input_artifact_index
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TaskEnvelope":

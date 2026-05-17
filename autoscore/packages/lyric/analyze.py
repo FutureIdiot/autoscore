@@ -112,7 +112,7 @@ def _line_windows(lines: list[str], duration_ms: int) -> list[tuple[int, int, st
 
 
 def _find_required_input_artifact(envelope: Any, artifact_id: str) -> ArtifactRef:
-    for artifact in envelope.input_artifacts:
-        if artifact.artifact_id == artifact_id:
-            return artifact
+    artifact = envelope.input_artifact_index.get(artifact_id)
+    if artifact is not None:
+        return artifact
     raise KeyError(artifact_id)

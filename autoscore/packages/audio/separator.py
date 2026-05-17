@@ -42,7 +42,7 @@ def run_mock_separator(envelope: TaskEnvelope, store: LocalArtifactStore) -> Tas
 
 
 def _find_input_artifact(envelope: TaskEnvelope, artifact_id: str):
-    for artifact in envelope.input_artifacts:
-        if artifact.artifact_id == artifact_id:
-            return artifact
+    artifact = envelope.input_artifact_index.get(artifact_id)
+    if artifact is not None:
+        return artifact
     raise KeyError(f"missing required input artifact: {artifact_id}")
