@@ -267,7 +267,7 @@ def _build_mock_phrases_from_timed_lyrics(
         )
         end_ms = min(end_limit, line.start_ms + default_phrase_ms)
         end_ms = max(line.start_ms + MIN_MOCK_PHRASE_MS, end_ms)
-        end_ms = min(max(line.start_ms + 1, total_duration_ms), end_ms)
+        end_ms = min(total_duration_ms, end_ms)
         phrase_id = f"phrase_{index + 1:03d}"
         phrases.append(
             PhraseSlice(
@@ -276,7 +276,7 @@ def _build_mock_phrases_from_timed_lyrics(
                 phrase_start_ms=line.start_ms,
                 phrase_end_ms=end_ms,
                 slice_start_ms=max(0, line.start_ms - PADDING_MS),
-                slice_end_ms=end_ms + PADDING_MS,
+                slice_end_ms=min(total_duration_ms, end_ms + PADDING_MS),
                 start_bar=line.start_ms / bar_ms,
                 end_bar=end_ms / bar_ms,
                 boundary_source="timed-lyrics",
@@ -314,7 +314,7 @@ def _build_mock_phrases_from_lyrics(
                 phrase_start_ms=start_ms,
                 phrase_end_ms=end_ms,
                 slice_start_ms=max(0, start_ms - PADDING_MS),
-                slice_end_ms=end_ms + PADDING_MS,
+                slice_end_ms=min(total_duration_ms, end_ms + PADDING_MS),
                 start_bar=start_ms / bar_ms,
                 end_bar=end_ms / bar_ms,
                 boundary_source="mock-lyric-vocal-activity",
@@ -338,7 +338,7 @@ def _build_mock_phrases_from_vocal_activity(*, total_duration_ms: int, bar_ms: f
             phrase_start_ms=start_ms,
             phrase_end_ms=end_ms,
             slice_start_ms=max(0, start_ms - PADDING_MS),
-            slice_end_ms=end_ms + PADDING_MS,
+            slice_end_ms=min(total_duration_ms, end_ms + PADDING_MS),
             start_bar=start_ms / bar_ms,
             end_bar=end_ms / bar_ms,
             boundary_source="mock-vocal-activity",
@@ -376,12 +376,20 @@ def _untimed_lyric_phrases(lyrics_path: Path) -> list[str]:
 
 def _timed_lyric_lines(lyrics_path: Path) -> list[TimedLyricLine]:
     timed_lines: list[TimedLyricLine] = []
+    pending_srt_start_ms: int | None = None
+    pending_srt_text: list[str] = []
     for raw_line in lyrics_path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line:
+            _append_pending_srt_line(timed_lines, pending_srt_start_ms, pending_srt_text)
+            pending_srt_start_ms = None
+            pending_srt_text = []
             continue
         lrc_matches = list(_LRC_TIMESTAMP_PATTERN.finditer(line))
         if lrc_matches:
+            _append_pending_srt_line(timed_lines, pending_srt_start_ms, pending_srt_text)
+            pending_srt_start_ms = None
+            pending_srt_text = []
             text = _strip_timestamps(line).strip()
             if text:
                 for match in lrc_matches:
@@ -389,8 +397,26 @@ def _timed_lyric_lines(lyrics_path: Path) -> list[TimedLyricLine]:
             continue
         srt_match = _SRT_TIMESTAMP_PATTERN.search(line)
         if srt_match and "-->" in line:
-            timed_lines.append(TimedLyricLine(start_ms=_srt_match_to_ms(srt_match), text=""))
+            _append_pending_srt_line(timed_lines, pending_srt_start_ms, pending_srt_text)
+            pending_srt_start_ms = _srt_match_to_ms(srt_match)
+            pending_srt_text = []
+            continue
+        if pending_srt_start_ms is not None and not _is_srt_sequence_number(line):
+            pending_srt_text.append(line)
+    _append_pending_srt_line(timed_lines, pending_srt_start_ms, pending_srt_text)
     return sorted(timed_lines, key=lambda item: item.start_ms)
+
+
+def _append_pending_srt_line(
+    timed_lines: list[TimedLyricLine],
+    start_ms: int | None,
+    text_lines: list[str],
+) -> None:
+    if start_ms is None:
+        return
+    text = " ".join(line.strip() for line in text_lines if line.strip())
+    if text:
+        timed_lines.append(TimedLyricLine(start_ms=start_ms, text=text))
 
 
 def _strip_timestamps(line: str) -> str:

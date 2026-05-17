@@ -474,6 +474,39 @@ class AutoscoreControllerTests(unittest.TestCase):
         self.assertEqual(len(phrase_data["phrases"]), 2)
         self.assertEqual(phrase_data["phrases"][0]["phraseStartMs"], 2500)
         self.assertEqual(phrase_data["phrases"][1]["phraseStartMs"], 8000)
+        self.assertEqual(phrase_data["phrases"][1]["sliceEndMs"], 16000)
+        self.assertEqual(phrase_data["phrases"][0]["boundarySource"], "timed-lyrics")
+
+    def test_run_step_detect_phrases_uses_srt_timed_lyrics_as_phrase_anchors(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir) / "workspaces"
+            source_audio = Path(temp_dir) / "song.wav"
+            source_audio.write_bytes(b"audio")
+            controller = AutoscoreController(workspace)
+            controller.create_project(
+                project_id="demo",
+                audio_path=source_audio,
+                lyrics_text=(
+                    "1\n"
+                    "00:00:02,500 --> 00:00:05,000\n"
+                    "first line\n"
+                    "\n"
+                    "2\n"
+                    "00:00:08,000 --> 00:00:12,000\n"
+                    "second line\n"
+                ),
+                global_tempo=120,
+                meter={"numerator": 4, "denominator": 4},
+            )
+            controller.run_step("demo", "separateAudio")
+            controller.run_step("demo", "estimateTempo")
+
+            controller.run_step("demo", "detectPhrases")
+            phrase_data = json.loads((workspace / "demo" / "timeline" / "phrases.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(len(phrase_data["phrases"]), 2)
+        self.assertEqual(phrase_data["phrases"][0]["phraseStartMs"], 2500)
+        self.assertEqual(phrase_data["phrases"][1]["phraseStartMs"], 8000)
         self.assertEqual(phrase_data["phrases"][0]["boundarySource"], "timed-lyrics")
 
     def test_project_status_reports_ready_tasks_by_available_artifacts(self) -> None:

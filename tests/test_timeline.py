@@ -1,6 +1,9 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 from autoscore.core.artifacts import ArtifactRef
+from autoscore.packages.timeline.phrases import _timed_lyric_lines
 from autoscore.packages.timeline import (
     AlignedFragment,
     LyricNoteAlignment,
@@ -67,6 +70,25 @@ class PhraseSliceTests(unittest.TestCase):
                 slice_start_ms=1200,
                 slice_end_ms=4400,
             )
+
+    def test_srt_timed_lyrics_preserve_text(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lyrics_path = Path(temp_dir) / "lyrics.srt"
+            lyrics_path.write_text(
+                "1\n"
+                "00:00:02,500 --> 00:00:05,000\n"
+                "first line\n"
+                "\n"
+                "2\n"
+                "00:00:08,000 --> 00:00:12,000\n"
+                "second line\n",
+                encoding="utf-8",
+            )
+
+            timed_lines = _timed_lyric_lines(lyrics_path)
+
+        self.assertEqual([line.start_ms for line in timed_lines], [2500, 8000])
+        self.assertEqual([line.text for line in timed_lines], ["first line", "second line"])
 
 
 class PhraseAlignmentTests(unittest.TestCase):
