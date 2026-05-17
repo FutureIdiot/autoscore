@@ -79,6 +79,8 @@ class LocalArtifactStoreTests(unittest.TestCase):
             "artifact_score_aligned_score_application_json",
         )
         self.assertEqual(default_extension_for_kind("audio/wav"), ".wav")
+        self.assertEqual(default_extension_for_kind("audio/mpeg"), ".mp3")
+        self.assertEqual(default_extension_for_kind("audio/mp4"), ".m4a")
         self.assertIsNone(default_extension_for_kind("application/octet-stream"))
 
 

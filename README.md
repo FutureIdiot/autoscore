@@ -80,8 +80,12 @@ songname_vox.wav      vocals candidate
 songname_instrument.wav accompaniment candidate
 ```
 
-Files with the same prefix create one workspace. The suffix only helps create
-grouping; artifact roles are registered later from pending inputs.
+Files with the same prefix create one workspace. Creation does not register
+artifacts; it only copies discovered files into project `inbox/` as pending
+inputs. Artifact roles are registered later when a task is sent. Source files
+in `importDir` are kept by default; add `D` to a send command, for example
+`send+D`, to delete external source files only after the send finishes cleanly
+and `artifact_score_json` exists.
 
 Current TUI command shape:
 
@@ -92,6 +96,7 @@ send                  send current project artifacts through the ready mock pipe
 send #                send to the numbered node task shown in the TUI
 send #&               send to # and continue through downstream ready tasks
 send #!               force rerun #
+send+D                run ready pipeline, then delete import sources after score output succeeds
 send TASK             send current artifacts to one named task, e.g. send detectPhrases
 ```
 

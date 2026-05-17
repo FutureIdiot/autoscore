@@ -13,6 +13,8 @@ _ARTIFACT_ID_SAFE_CHARS = re.compile(r"[^a-z0-9]+")
 _KIND_EXTENSION = {
     "audio/wav": ".wav",
     "audio/flac": ".flac",
+    "audio/mpeg": ".mp3",
+    "audio/mp4": ".m4a",
     "audio/midi": ".mid",
     "text/plain": ".txt",
     "application/json": ".json",

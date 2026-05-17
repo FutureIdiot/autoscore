@@ -67,7 +67,7 @@ def _project_screen(controller: AutoscoreController, project_id: str) -> None:
         _print_project_status(status)
         print()
         choice = _prompt(
-            "send [#|task][&][!], [i] info, [h] help, [b] back, [q] quit: "
+            "send [#|task][&][!][D], [i] info, [h] help, [b] back, [q] quit: "
         ).strip()
         normalized = choice.lower()
         if normalized == "b":
@@ -85,7 +85,7 @@ def _project_screen(controller: AutoscoreController, project_id: str) -> None:
         if normalized.startswith("send "):
             _send_to_nodes(controller, project_id, choice)
             continue
-        if normalized == "send" or normalized in {"send&", "send!"} or normalized == "send&!":
+        if normalized.startswith("send"):
             _send_to_nodes(controller, project_id, choice)
 
 
@@ -118,7 +118,7 @@ def _run_step(controller: AutoscoreController, project_id: str, task_type: str) 
 
 def _send_to_nodes(controller: AutoscoreController, project_id: str, command: str, *, pause: bool = True) -> None:
     try:
-        task_type, continue_pipeline, force = _parse_send_command(
+        task_type, continue_pipeline, force, delete_sources = _parse_send_command(
             command,
             status=controller.get_project_status(project_id),
         )
@@ -136,6 +136,8 @@ def _send_to_nodes(controller: AutoscoreController, project_id: str, command: st
             print("No ready nodes.")
         for result in results:
             print(f"{result.execution.node_id}: {result.task_type} -> {result.status}")
+        if delete_sources:
+            _delete_sources_after_successful_send(controller, project_id, results)
     if pause:
         _prompt("Press Enter to continue: ")
 
@@ -153,21 +155,50 @@ def _prepare_task_context(controller: AutoscoreController, project_id: str, task
     controller.provide_tempo_timeline(project_id, global_tempo=tempo)
 
 
-def _parse_send_command(command: str, *, status: ProjectStatus | None = None) -> tuple[str | None, bool, bool]:
+def _parse_send_command(command: str, *, status: ProjectStatus | None = None) -> tuple[str | None, bool, bool, bool]:
     payload = command.strip()[len("send") :].strip()
     continue_pipeline = False
     force = False
-    while payload.endswith(("!", "&")):
+    delete_sources = False
+    while payload.endswith(("!", "&", "D", "d")):
         suffix = payload[-1]
         payload = payload[:-1].strip()
         if suffix == "!":
             force = True
         if suffix == "&":
             continue_pipeline = True
+        if suffix.lower() == "d":
+            delete_sources = True
+        if payload.endswith("+"):
+            payload = payload[:-1].strip()
     task_type = _task_type_from_send_payload(payload, status=status) if payload else None
     if task_type is None:
         continue_pipeline = True
-    return task_type, continue_pipeline, force
+    return task_type, continue_pipeline, force, delete_sources
+
+
+def _delete_sources_after_successful_send(
+    controller: AutoscoreController,
+    project_id: str,
+    results: list[object],
+) -> None:
+    if not results:
+        print("Source cleanup skipped: no tasks ran.")
+        return
+    if any(getattr(result, "status", "") != "succeeded" or getattr(result, "errors", []) for result in results):
+        print("Source cleanup skipped: send did not finish cleanly.")
+        return
+    status = controller.get_project_status(project_id)
+    if "artifact_score_json" not in status.artifact_ids:
+        print("Source cleanup skipped: score output is not available.")
+        return
+    deleted_paths = controller.delete_bound_pending_input_sources(project_id)
+    if not deleted_paths:
+        print("Source cleanup: no external source files deleted.")
+        return
+    print("Deleted source files:")
+    for path in deleted_paths:
+        print(f"- {path}")
 
 
 def _task_type_from_send_payload(payload: str, *, status: ProjectStatus | None) -> str:
@@ -222,7 +253,7 @@ def _create_project(controller: AutoscoreController, *, overwrite: bool = False)
     _clear_screen()
     print("Create Project")
     print("--------------")
-    print(f"Inbox/import dir: {_provided_audio_inbox(controller)}")
+    print(f"Inbox/import dir: {_input_inbox(controller)}")
     print(f"Overwrite existing projects: {overwrite}")
     print()
     try:
@@ -251,7 +282,7 @@ def _create_project(controller: AutoscoreController, *, overwrite: bool = False)
                     )
                 )
         else:
-            print("No audio files found. Creating an empty project.")
+            print("No input files found. Creating an empty project.")
             project_id = _prompt("Project id: ").strip()
             if not project_id:
                 print("Cancelled.")
@@ -304,7 +335,7 @@ def _print_help() -> None:
     print()
     print("Commands")
     print("--------")
-    print("create     Create a project from an inbox/import-dir audio file.")
+    print("create     Create projects from inbox/import-dir input files.")
     print("create!    Create and overwrite an existing project.")
     print("info       View or edit current project tempo and meter.")
     print("send       In a project, start at the first ready pipeline node and continue.")
@@ -312,6 +343,7 @@ def _print_help() -> None:
     print("send TASK  Send to a named task, e.g. send detectPhrases.")
     print("send #&    Send to #, then continue through downstream ready nodes.")
     print("send #!    Force rerun #.")
+    print("send+D    Run ready pipeline and delete import sources after score output succeeds.")
     print("r          Refresh.")
     print("b          Go back from a project.")
     print("q          Quit.")
@@ -319,10 +351,11 @@ def _print_help() -> None:
 
 
 def _input_groups_from_inbox(controller: AutoscoreController) -> list[tuple[str, list[Path]]]:
-    root = _provided_audio_inbox(controller)
+    root = _input_inbox(controller)
     if not root.is_dir():
         raise FileNotFoundError(root)
     input_extensions = {extension.lower() for extension in controller.app_config.audio_extensions}
+    input_extensions.update({".mid", ".midi"})
     input_extensions.add(".txt")
     grouped: dict[str, list[Path]] = {}
     for path in sorted(root.iterdir()):
@@ -332,7 +365,7 @@ def _input_groups_from_inbox(controller: AutoscoreController) -> list[tuple[str,
     return sorted(grouped.items(), key=lambda item: project_id_from_name(item[0]).lower())
 
 
-def _provided_audio_inbox(controller: AutoscoreController) -> Path:
+def _input_inbox(controller: AutoscoreController) -> Path:
     return Path(controller.app_config.import_dir or "inbox")
 
 

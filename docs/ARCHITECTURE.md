@@ -111,8 +111,9 @@ and keep enough package metadata to answer three scheduling questions:
 The task type remains the command-level unit. Required and optional artifact
 contracts belong to task definitions, not to project manifests. When the TUI
 resolves `send 2` or `send detectPhrases`, the controller maps that target to a
-task type, checks the task artifact contract, binds any pending input needed by
-that task, and then builds a `TaskEnvelope` for a node that supports the task.
+task type, registers any pending project inputs as artifacts by filename
+purpose, checks the task artifact contract, and then builds a `TaskEnvelope`
+for a node that supports the task.
 
 Project manifests should store durable project state: artifacts, steps, manual
 metadata, warnings, and errors. They should not store machine-specific runtime

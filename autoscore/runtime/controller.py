@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from autoscore.config import AppConfig, load_app_config
-from autoscore.core.artifacts import LocalArtifactStore
+from autoscore.core.artifacts import LocalArtifactStore, default_extension_for_kind
 from autoscore.core.projects import ProjectManifest
 from autoscore.runtime.registry import NodeRegistration, default_local_nodes
 from autoscore.runtime.runners import (
@@ -44,35 +44,35 @@ class InputArtifactSpec:
     """How one pending input role is registered into the project artifact set."""
 
     artifact_id: str
-    kind: str
-    relative_path: str
+    kind: str | None
+    relative_path_template: str
 
 
 _INPUT_ARTIFACT_SPECS = {
     "originalAudio": InputArtifactSpec(
         artifact_id="artifact_original_audio",
-        kind="audio/wav",
-        relative_path="input/original_audio.wav",
+        kind=None,
+        relative_path_template="input/original_audio{extension}",
     ),
     "vocals": InputArtifactSpec(
         artifact_id="artifact_vocals_wav",
-        kind="audio/wav",
-        relative_path="audio/vocals.wav",
+        kind=None,
+        relative_path_template="audio/vocals{extension}",
     ),
     "accompaniment": InputArtifactSpec(
         artifact_id="artifact_accompaniment_wav",
-        kind="audio/wav",
-        relative_path="audio/accompaniment.wav",
+        kind=None,
+        relative_path_template="audio/accompaniment{extension}",
     ),
     "lyrics": InputArtifactSpec(
         artifact_id="artifact_lyrics_txt",
         kind="text/plain",
-        relative_path="input/lyrics.txt",
+        relative_path_template="input/lyrics.txt",
     ),
     "melodyMidi": InputArtifactSpec(
         artifact_id="artifact_melody_midi",
         kind="audio/midi",
-        relative_path="input/melody.mid",
+        relative_path_template="input/melody.mid",
     ),
 }
 
@@ -122,7 +122,7 @@ class ProjectCreateResult:
     """Result for one batch project creation candidate."""
 
     project_id: str
-    audio_path: str
+    input_paths: str
     status: str
     message: str = ""
 
@@ -247,9 +247,6 @@ class AutoscoreController:
         """Create a project workspace with user inputs left pending."""
 
         self._validate_project_id(project_id)
-        if lyrics_text is None and lyrics_path is None:
-            raise ValueError("lyrics_text or lyrics_path is required")
-
         pending_paths = [Path(audio_path)]
         if lyrics_path is not None:
             pending_paths.append(Path(lyrics_path))
@@ -316,7 +313,7 @@ class AutoscoreController:
                 results.append(
                     ProjectCreateResult(
                         project_id=project_id,
-                        audio_path=", ".join(str(path) for path in input_files),
+                        input_paths=", ".join(str(path) for path in input_files),
                         status="skipped",
                         message=message,
                     )
@@ -338,7 +335,7 @@ class AutoscoreController:
                 results.append(
                     ProjectCreateResult(
                         project_id=project_id,
-                        audio_path=", ".join(str(path) for path in input_files),
+                        input_paths=", ".join(str(path) for path in input_files),
                         status="skipped",
                         message="project already exists",
                     )
@@ -347,22 +344,55 @@ class AutoscoreController:
                 results.append(
                     ProjectCreateResult(
                         project_id=project_id,
-                        audio_path=", ".join(str(path) for path in input_files),
+                        input_paths=", ".join(str(path) for path in input_files),
                         status="failed",
                         message=str(exc),
                     )
                 )
             else:
-                for input_file in input_files:
-                    input_file.unlink()
                 results.append(
                     ProjectCreateResult(
                         project_id=project_id,
-                        audio_path=", ".join(str(path) for path in input_files),
+                        input_paths=", ".join(str(path) for path in input_files),
                         status="created",
                     )
                 )
         return results
+
+    def delete_bound_pending_input_sources(self, project_id: str) -> list[str]:
+        """Delete external source files for pending inputs that have been bound."""
+
+        manifest_path = self._manifest_path(project_id)
+        manifest = ProjectManifest.load(manifest_path)
+        project_dir = Path(manifest.project_dir).resolve()
+        deleted_paths = []
+        changed = False
+        pending_inputs = _pending_inputs(manifest)
+        for pending_input in pending_inputs:
+            if pending_input.get("status") != "bound" or pending_input.get("sourceDeleted"):
+                continue
+            source_path = str(pending_input.get("sourcePath", ""))
+            if not source_path:
+                continue
+            source = Path(source_path)
+            try:
+                resolved_source = source.resolve()
+            except FileNotFoundError:
+                pending_input["sourceDeleted"] = True
+                changed = True
+                continue
+            if resolved_source.is_relative_to(project_dir):
+                continue
+            if not resolved_source.is_file():
+                continue
+            resolved_source.unlink()
+            pending_input["sourceDeleted"] = True
+            deleted_paths.append(str(resolved_source))
+            changed = True
+        if changed:
+            manifest.metadata[_PENDING_INPUTS_METADATA_KEY] = pending_inputs
+            manifest.save(manifest_path)
+        return deleted_paths
 
     def attach_artifact(
         self,
@@ -596,10 +626,12 @@ class AutoscoreController:
                 changed = True
                 continue
             source_path = _pending_input_source_path(store, pending_input)
+            kind = spec.kind or str(pending_input.get("kind") or _kind_for_input_path(source_path))
+            relative_path = _input_artifact_relative_path(spec, kind=kind, source_path=source_path)
             artifact = store.import_file(
                 source_path,
-                kind=spec.kind,
-                relative_path=spec.relative_path,
+                kind=kind,
+                relative_path=relative_path,
                 artifact_id=spec.artifact_id,
                 metadata={
                     "provided": True,
@@ -1097,6 +1129,15 @@ def _input_role_for_pending_input(pending_input: dict[str, object]) -> str:
     return "originalAudio"
 
 
+def _input_artifact_relative_path(spec: InputArtifactSpec, *, kind: str, source_path: Path) -> str:
+    if "{extension}" not in spec.relative_path_template:
+        return spec.relative_path_template
+    extension = default_extension_for_kind(kind) or source_path.suffix.lower()
+    if not extension:
+        extension = ".bin"
+    return spec.relative_path_template.format(extension=extension)
+
+
 def _kind_for_input_path(path: Path) -> str:
     if path.suffix.lower() in _MIDI_INPUT_EXTENSIONS:
         return "audio/midi"
@@ -1109,4 +1150,8 @@ def _kind_for_audio_path(path: Path) -> str:
     suffix = path.suffix.lower()
     if suffix == ".flac":
         return "audio/flac"
+    if suffix == ".mp3":
+        return "audio/mpeg"
+    if suffix == ".m4a":
+        return "audio/mp4"
     return "audio/wav"

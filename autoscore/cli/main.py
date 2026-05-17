@@ -19,7 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
     create_parser = subparsers.add_parser("create", help="Create a project workspace.")
     create_parser.add_argument("--project-id", required=True)
     create_parser.add_argument("--audio", required=True, help="Input audio path.")
-    lyrics_source = create_parser.add_mutually_exclusive_group(required=True)
+    lyrics_source = create_parser.add_mutually_exclusive_group()
     lyrics_source.add_argument("--lyrics", help="Lyrics text.")
     lyrics_source.add_argument("--lyrics-file", help="Lyrics text file.")
     create_parser.add_argument("--tempo", type=float, default=None, help="Manual global tempo.")
